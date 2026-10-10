@@ -1,0 +1,90 @@
+# Workspace root for the Rust-native LLM stack.
+#
+# Architecture rules this file participates in:
+# - Dependency direction is enforced by Cargo crate boundaries: the crate graph
+#   is the architecture, not documentation-only layering.
+# - Dependency versions are centralized here; member crates use `workspace = true`.
+# - No execution backend is selected at the workspace level. Burn 0.22 enables
+#   none by default, and each composition root in `apps/*` selects exactly one
+#   through its own features.
+#
+# Members are added when a crate has code that owns a responsibility, not to
+# match a planned tree. `crates/llm-tokenizer`, `llm-data`, `llm-model`,
+# `llm-training`, `llm-inference`, `llm-eval` and `llm-server` join the
+# workspace with the checklist sections that implement them.
+
+[workspace]
+resolver = "3"
+members = [
+    "apps/prepare",
+    "apps/tokenizer",
+    "apps/train",
+    "apps/generate",
+    "crates/llm-core",
+    "crates/llm-data",
+    "crates/llm-model",
+    "crates/llm-tokenizer",
+    "crates/llm-training",
+    "crates/llm-inference",
+    "crates/llm-checkpoint",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Burn 0.22 declares this minimum supported Rust version. Cargo enforces it when
+# resolving the workspace, so an older toolchain fails before compiling.
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+# --- ML framework ---------------------------------------------------------
+# The execution-backend feature is deliberately absent: it is selected by the
+# application crate that constructs the device.
+burn = "0.22"
+
+# --- Shared configuration and manifests -----------------------------------
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+
+# --- Tokenization ---------------------------------------------------------
+# Default features are disabled on purpose: the default `onig` feature pulls
+# Oniguruma, a native C library. `fancy-regex` is the pure-Rust alternative and
+# is required: tokenizers 0.23 refuses to build with neither regex backend.
+tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"] }
+
+# --- Hashing and integrity ------------------------------------------------
+sha2 = "0.10"
+
+# --- Command-line interfaces ----------------------------------------------
+clap = { version = "4", features = ["derive"] }
+
+# --- Typed library errors -------------------------------------------------
+thiserror = "2"
+
+# --- Workspace members ----------------------------------------------------
+llm-core = { path = "crates/llm-core" }
+llm-data = { path = "crates/llm-data" }
+llm-model = { path = "crates/llm-model" }
+llm-tokenizer = { path = "crates/llm-tokenizer" }
+llm-training = { path = "crates/llm-training" }
+llm-inference = { path = "crates/llm-inference" }
+llm-checkpoint = { path = "crates/llm-checkpoint" }
+
+[workspace.lints.rust]
+# `unsafe` is prohibited in project code by default.
+unsafe_code = "deny"
+# Public APIs carry documentation.
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# The panic family is not an error-handling strategy on production paths.
+# `clippy.toml` re-allows these inside tests.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"

@@ -1,0 +1,16 @@
+# Line endings are normalised to LF in the repository, so a checkout on any
+# platform produces the same bytes.
+* text=auto eol=lf
+
+# Fixtures are exempt, and this is not cosmetic. The data pipeline and the
+# tokenizer identity hash are computed over these exact bytes, so a line-ending
+# rewrite would change every recorded hash and break resume and verification.
+tests/fixtures/* -text
+
+# Binary artifacts are never converted.
+*.bpk binary
+*.safetensors binary
+*.mpk binary
+*.png binary
+*.jpg binary
+*.ico binary

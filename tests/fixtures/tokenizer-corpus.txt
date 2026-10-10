@@ -1,0 +1,59 @@
+The quick brown fox jumps over the lazy dog.
+A language model learns to predict the next token in a sequence.
+A tokenizer converts text into a sequence of integer identifiers.
+Byte-level byte pair encoding keeps every input representable.
+Training a tokenizer is deterministic when the corpus order is fixed.
+Reserved tokens must keep their identifiers for the lifetime of the model.
+Padding tokens are excluded from the loss through an explicit mask.
+Rotary position embedding rotates query and value channels before attention.
+The feed-forward network uses a gated linear unit with a SiLU activation.
+Gradient clipping by global norm keeps early optimizer steps stable.
+Checkpoint publication is atomic: write, validate, then rename.
+Resuming a run must restore the optimizer, the scheduler and the global step.
+A cached decode must agree with an uncached decode within dtype tolerance.
+Perplexity is only meaningful when the evaluation corpus matches the tokenizer.
+Every prepared shard records the tokenizer identity it was built with.
+Numerical health metrics include the gradient norm and the loss scale.
+Sequence packing minimises padding while preserving document boundaries.
+Deduplication happens before the evaluation split to reduce contamination.
+The reference backend is deterministic and free of just-in-time compilation.
+Profiling identifies the bottleneck before any kernel is rewritten.
+Zero means zero, one means one, and the rest is arithmetic.
+Café, naïve, Zürich, résumé, coöperate, façade, jalapeño, piñata.
+Straße, æther, øre, ångström, smørrebrød, crème brûlée.
+Οἱ δὲ πολλοὶ ἄνθρωποι οὐχ ὁμοίως κρίνουσιν περὶ τῶν αὐτῶν.
+Ἡ γλῶσσα ἡ ἑλληνικὴ μακρὰ καὶ ποικίλη ἐστίν.
+Здравствуйте, мир! Языковая модель учится предсказывать следующий токен.
+Байтовое кодирование сохраняет представимость любого ввода.
+مریم از پنجره به آسمان نگاه کرد و لبخند زد.
+زبان فارسی از راست به چپ نوشته می‌شود و نویسه‌های پیوسته دارد.
+مدل زبانی باید بتواند متن فارسی را بدون آسیب پردازش کند.
+سلام دنیا، این یک متن آزمایشی برای آموزش توکنایزر است.
+数字と漢字とひらがなとカタカナが混在する文章です。
+한국어 문장은 띄어쓰기와 조사가 발달해 있습니다.
+混合文字列：English، فارسی، عربى، 中文، 日本語، 한국어。
+Emoji and symbols: 🌍 🚀 ✅ ❌ → ← ↔ ≈ ≠ ≤ ≥ ± × ÷.
+Zero-width joiner and combining marks: 👩‍💻 e\u0301 a\u0300 n\u0303.
+Control punctuation: "quotes", 'apostrophes', (parentheses), [brackets], {braces}.
+Numbers: 0 1 2 3 42 255 1024 32768 1000000 3.14159 -0.5 1e-8 6.022e23.
+Whitespace runs: alpha    beta	gamma
+
+delta.
+Mixed identifiers: max_sequence_length, num_kv_heads, rms_norm_eps, ffn_intermediate_size.
+File paths: /usr/local/bin, C:\Projects\model, ./configs/stage1-110m.toml.
+URLs: https://example.com/path?query=value&other=1#fragment
+Timestamps: 2026-10-10T11:15:26Z and 2026-10-10 11:15:26.
+Hashes: 3f786850e387550fdab836ed7e6dc881de23001b9e2b5f0e9e3d4a4c9e2c1b0a.
+The tokenizer must not corrupt combining marks or non-Latin scripts.
+An empty input is defined and produces an empty token sequence.
+Long inputs are truncated only when the caller explicitly asks for it.
+A vocabulary that cannot be filled is a data problem, not a tuning problem.
+The reserved identifiers are bos, eos, pad and unk in that order.
+Vocabulary size must equal the model configuration it was trained for.
+Encode and decode must round-trip arbitrary valid UTF-8 text.
+Special token identifiers never change after the model has been trained.
+Every artifact is identified by a hash recorded in the run manifest.
+The dataset manifest records source, licence and acquisition date.
+Sequences are consumed in iteration order, so determinism is the caller's duty.
+The trainer places reserved tokens at the head of the vocabulary.
+A mismatch between artifact and configuration fails fast rather than silently.

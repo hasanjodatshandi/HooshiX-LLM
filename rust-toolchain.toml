@@ -1,0 +1,9 @@
+# Pins the toolchain used by every cargo invocation inside this workspace.
+#
+# The channel is `stable`. The real minimum-version gate is
+# `rust-version = "1.95"` in the workspace manifest: Burn 0.22 declares that
+# MSRV, and Cargo refuses to resolve the workspace on an older toolchain.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

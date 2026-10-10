@@ -1,0 +1,75 @@
+# Stage-1 baseline: a ~110M-parameter dense decoder-only model.
+#
+# This is the reference experiment configuration. It is explicit on purpose:
+# nothing is left implicit, so the resolved configuration a run depends on is
+# exactly what is written here.
+#
+# Backend note: `flex` is the pure-Rust reference backend and the only backend
+# verified on this machine. See docs/13_DEPENDENCIES_AND_TOOLCHAIN.md section 5.
+
+version = 2
+
+[model]
+vocab_size = 32768
+hidden_size = 768
+num_layers = 12
+num_heads = 12
+num_kv_heads = 12
+ffn_intermediate_size = 2048
+max_sequence_length = 2048
+rope_theta = 10000.0
+rms_norm_eps = 0.00001
+tie_embeddings = true
+linear_bias = false
+
+[tokenizer]
+vocab_size = 32768
+model = "bpe"
+artifact = "artifacts/tokenizer.json"
+
+[tokenizer.special_tokens]
+bos = 0
+eos = 1
+pad = 2
+unk = 3
+
+[data]
+data_root = "artifacts/data"
+sequence_length = 2048
+micro_batch_size = 8
+shuffle_seed = 0
+validation_basis_points = 50
+test_basis_points = 50
+split_seed = 0
+
+[training]
+max_steps = 100000
+data_parallel_world_size = 1
+gradient_accumulation_steps = 1
+seed = 0
+gradient_clip_global_norm = 1.0
+checkpoint_interval_steps = 1000
+evaluation_interval_steps = 500
+
+[training.optimizer]
+learning_rate = 0.0003
+weight_decay = 0.1
+beta1 = 0.9
+beta2 = 0.95
+epsilon = 1e-8
+
+[training.scheduler]
+warmup_steps = 2000
+cosine_iters = 100000
+
+[generation]
+max_new_tokens = 128
+seed = 0
+stop_on_eos = true
+
+[generation.strategy]
+kind = "greedy"
+
+[runtime]
+backend = "flex"
+precision = "f32"

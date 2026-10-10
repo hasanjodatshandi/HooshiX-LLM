@@ -1,0 +1,14 @@
+# Build output
+/target
+
+# Training data and checkpoints are never committed.
+/artifacts/*
+!/artifacts/.gitkeep
+
+# Experiment run directories (resolved config, manifest, metrics, checkpoints).
+/runs/
+
+# Model and checkpoint artifacts
+*.bpk
+*.safetensors
+*.mpk

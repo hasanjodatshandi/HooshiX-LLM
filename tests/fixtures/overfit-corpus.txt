@@ -1,0 +1,3 @@
+The tiny model learns this line. The tiny model learns this line.
+A small model can memorize a small text. A small model can memorize a small text.
+Overfitting is a test, not a goal. Overfitting is a test, not a goal.

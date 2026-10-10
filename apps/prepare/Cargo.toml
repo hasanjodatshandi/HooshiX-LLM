@@ -1,0 +1,19 @@
+[package]
+name = "prepare-cli"
+description = "Command-line entry point for preparing checksummed token shards from a corpus."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+llm-core = { workspace = true }
+llm-data = { workspace = true }
+llm-tokenizer = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

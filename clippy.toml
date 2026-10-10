@@ -1,0 +1,6 @@
+# Tests may use the panic family: a failure there should abort the test, and the
+# surrounding context is obvious. Production paths stay covered by the
+# workspace-level lint denies for unwrap_used, expect_used and panic.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

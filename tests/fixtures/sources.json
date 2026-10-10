@@ -1,0 +1,12 @@
+[
+  {
+    "source_id": "tokenizer-corpus",
+    "source_name": "Tokenizer fixture corpus",
+    "origin": "written by this repository for deterministic tests",
+    "license": "CC0-1.0",
+    "acquisition_date": "2026-10-10",
+    "content_type": { "kind": "plain_text" },
+    "language": "en",
+    "path": "tests/fixtures/tokenizer-corpus.txt"
+  }
+]

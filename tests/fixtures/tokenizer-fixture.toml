@@ -1,0 +1,76 @@
+# Configuration paired with tests/fixtures/tokenizer-corpus.txt.
+#
+# The fixture corpus is deliberately small, so it cannot fill a 32768-token
+# vocabulary. This configuration shrinks the vocabulary contract to what the
+# fixture can actually produce, which keeps the tokenizer tests fast while
+# exercising the same code path and the same invariants as the real
+# configuration in configs/.
+#
+# 320 = the 256-byte alphabet + 4 reserved tokens + 60 learned merges.
+
+version = 2
+
+[model]
+vocab_size = 320
+hidden_size = 128
+num_layers = 4
+num_heads = 4
+num_kv_heads = 4
+ffn_intermediate_size = 512
+max_sequence_length = 256
+rope_theta = 10000.0
+rms_norm_eps = 0.00001
+tie_embeddings = true
+linear_bias = false
+
+[tokenizer]
+vocab_size = 320
+model = "bpe"
+artifact = "target/tmp/tokenizer-fixture.json"
+
+[tokenizer.special_tokens]
+bos = 0
+eos = 1
+pad = 2
+unk = 3
+
+[data]
+data_root = "artifacts/data"
+sequence_length = 128
+micro_batch_size = 4
+shuffle_seed = 0
+validation_basis_points = 50
+test_basis_points = 50
+split_seed = 0
+
+[training]
+max_steps = 200
+data_parallel_world_size = 1
+gradient_accumulation_steps = 1
+seed = 0
+gradient_clip_global_norm = 1.0
+checkpoint_interval_steps = 50
+evaluation_interval_steps = 25
+
+[training.optimizer]
+learning_rate = 0.001
+weight_decay = 0.1
+beta1 = 0.9
+beta2 = 0.95
+epsilon = 1e-8
+
+[training.scheduler]
+warmup_steps = 10
+cosine_iters = 200
+
+[generation]
+max_new_tokens = 32
+seed = 1234
+stop_on_eos = true
+
+[generation.strategy]
+kind = "greedy"
+
+[runtime]
+backend = "flex"
+precision = "f32"

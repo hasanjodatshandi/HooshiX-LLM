@@ -1,0 +1,25 @@
+[package]
+name = "llm-training"
+description = "Training-loop orchestration: one optimization step and the loop around it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+llm-core = { workspace = true }
+llm-model = { workspace = true }
+llm-checkpoint = { workspace = true }
+burn = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# Tests need a concrete backend before a `Device` can be built. Flex is the
+# project's reference path; see the note in `crates/llm-model/Cargo.toml`.
+burn = { workspace = true, features = ["flex"] }
+
+[lints]
+workspace = true

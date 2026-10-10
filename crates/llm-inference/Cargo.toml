@@ -1,0 +1,20 @@
+[package]
+name = "llm-inference"
+description = "Sampling and generation: nothing about training, everything about producing text."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+llm-core = { workspace = true }
+llm-model = { workspace = true }
+burn = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+burn = { workspace = true, features = ["flex"] }
+
+[lints]
+workspace = true

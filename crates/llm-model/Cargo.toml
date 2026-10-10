@@ -1,0 +1,22 @@
+[package]
+name = "llm-model"
+description = "Decoder-only Transformer primitives, model definition and causal language-model loss."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+llm-core = { workspace = true }
+burn = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# Tests need a concrete backend before a `Device` can be built. Flex is the
+# project's reference path, and it is requested only for test builds so that a
+# release build of an application can still select an accelerator alone.
+burn = { workspace = true, features = ["flex"] }
+
+[lints]
+workspace = true

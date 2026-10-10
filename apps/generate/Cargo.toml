@@ -1,0 +1,24 @@
+[package]
+name = "generate-cli"
+description = "Continue a prompt with a trained checkpoint."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "generate-cli"
+path = "src/main.rs"
+
+[dependencies]
+llm-core = { workspace = true }
+llm-model = { workspace = true }
+llm-tokenizer = { workspace = true }
+llm-inference = { workspace = true }
+llm-checkpoint = { workspace = true }
+burn = { workspace = true, features = ["flex"] }
+clap = { workspace = true }
+
+[lints]
+workspace = true

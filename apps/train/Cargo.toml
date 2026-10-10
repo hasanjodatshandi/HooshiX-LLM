@@ -1,0 +1,28 @@
+[package]
+name = "train"
+description = "Composition root for the training application."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+llm-core = { workspace = true }
+thiserror = { workspace = true }
+
+# Burn is a direct dependency of the composition root because this is where the
+# execution backend is chosen and the `Device` is constructed.
+burn = { workspace = true }
+
+[features]
+# Exactly one backend feature must be enabled. `flex` is the deterministic
+# CPU reference path. Use `--no-default-features` when selecting another.
+default = ["flex"]
+flex = ["burn/flex"]
+cpu = ["burn/cpu"]
+cuda = ["burn/cuda"]
+wgpu = ["burn/wgpu"]
+
+[lints]
+workspace = true
