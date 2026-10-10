@@ -1,0 +1,149 @@
+//! Measures training throughput on the reference backend.
+//!
+//! Run with:
+//!
+//! ```text
+//! cargo run --release -p llm-training --example throughput
+//! BATCH=8 SEQUENCE=2048 STEPS=2 cargo run --release -p llm-training --example throughput
+//! ```
+//!
+//! # Why this exists
+//!
+//! "Can this be trained on a CPU?" is an empirical question, and the answer
+//! depends on the machine, the batch, the sequence length and the backend. A
+//! benchmark that reports a number for the actual configured architecture is
+//! worth more than an estimate, and it is what a Stage-1 run plan has to be
+//! built on.
+
+// An example aborts on failure rather than returning an error: there is no
+// caller to hand a failure to, and the panic message names the cause.
+// `clippy.toml` relaxes the panic family for tests only.
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
+use std::time::Instant;
+
+use burn::tensor::{Device, Int, Tensor, TensorData};
+use llm_core::ExperimentConfig;
+use llm_model::{Transformer, all_positions, next_token_pairs};
+use llm_training::{TokenBatch, Trainer, WarmupCosineSchedule};
+
+/// Reads an environment variable as a number, or uses the default.
+fn setting(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+fn main() {
+    let config_path =
+        std::env::var("CONFIG").unwrap_or_else(|_| "configs/stage1-110m.toml".to_owned());
+    let config = ExperimentConfig::load(&config_path)
+        .unwrap_or_else(|error| panic!("{config_path}: {error}"));
+
+    let batch = setting("BATCH", config.data.micro_batch_size as usize);
+    let sequence = setting("SEQUENCE", config.data.sequence_length as usize);
+    let steps = setting("STEPS", 2);
+    let warmup = setting("WARMUP", 0);
+
+    let device = Device::flex().autodiff();
+    llm_model::init::seed(&device, config.training.seed);
+
+    let parameters = config
+        .model
+        .parameter_count()
+        .expect("the configured model fits in u64");
+    println!(
+        "model: {} parameters ({:.1}M), backend flex, precision {:?}",
+        parameters,
+        parameters as f64 / 1e6,
+        config.runtime.precision
+    );
+    println!("batch {batch}, sequence {sequence}, {steps} timed steps");
+
+    let model = Transformer::new(&config.model, &device)
+        .unwrap_or_else(|error| panic!("the configured model is not valid: {error}"));
+
+    // A synthetic batch. This is a throughput measurement, not a data test, so
+    // the ids only need to be in range.
+    let tokens: Vec<i32> = (0..(batch * (sequence + 1)))
+        .map(|index| (index % config.model.vocab_size) as i32)
+        .collect();
+    let window =
+        Tensor::<2, Int>::from_data(TensorData::new(tokens, [batch, sequence + 1]), &device);
+    let (input, target) = next_token_pairs(window).expect("more than one token");
+    let batch_tokens = batch * sequence;
+    let example = TokenBatch {
+        input,
+        target,
+        mask: all_positions(batch, sequence, &device),
+    };
+
+    let schedule = WarmupCosineSchedule::new(
+        config.training.optimizer.learning_rate,
+        config.training.scheduler.warmup_steps,
+        config.training.scheduler.cosine_iters,
+    )
+    .expect("the configured schedule is valid");
+    let clip = config.training.gradient_clip_global_norm;
+    let mut trainer = Trainer::new(schedule, clip);
+
+    let mut model = model;
+    let mut timings = Vec::new();
+    for step in 0..(warmup + steps) {
+        let started = Instant::now();
+        let (updated, metrics) = trainer
+            .step(model, std::slice::from_ref(&example))
+            .unwrap_or_else(|error| panic!("step {step} failed: {error}"));
+        model = updated;
+        let elapsed = started.elapsed().as_secs_f64();
+
+        if step < warmup {
+            println!("step {step}: {elapsed:.3}s (warmup, not counted)");
+            continue;
+        }
+        let per_token = elapsed / batch_tokens as f64;
+        println!(
+            "step {step}: {elapsed:.4}s  loss {:.4}  {:.0} tokens/s  {:.3} ms/token",
+            metrics.train_loss,
+            1.0 / per_token,
+            per_token * 1e3
+        );
+        timings.push(elapsed);
+    }
+
+    let mean = timings.iter().sum::<f64>() / timings.len() as f64;
+    let tokens_per_second = batch_tokens as f64 / mean;
+    println!();
+    println!(
+        "at batch {batch}, sequence {sequence}: {mean:.4}s per step, \
+         {tokens_per_second:.0} tokens/s"
+    );
+    println!(
+        "one pass over 1B tokens at this shape: {:.1} hours",
+        1e9 / tokens_per_second / 3600.0
+    );
+
+    // The configured run's own shapes, not this measurement's. Attention grows
+    // quadratically in sequence length, so a throughput measured at one shape
+    // does not transfer to another, and this prints the comparison rather than
+    // extrapolating from it.
+    let configured_tokens = (config.data.micro_batch_size as usize)
+        * (config.data.sequence_length as usize)
+        * (config.training.max_steps as usize);
+    println!(
+        "the configured run is {} steps at batch {} and sequence {}, which is {:.2}B tokens",
+        config.training.max_steps,
+        config.data.micro_batch_size,
+        config.data.sequence_length,
+        configured_tokens as f64 / 1e9
+    );
+    if batch != config.data.micro_batch_size as usize
+        || sequence != config.data.sequence_length as usize
+    {
+        println!(
+            "note: these are not the shapes measured above, so the rate reported \
+             here does not apply to the configured run"
+        );
+    }
+}
