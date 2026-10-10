@@ -27,6 +27,38 @@ use llm_core::ExperimentConfig;
 use llm_model::{Transformer, all_positions, next_token_pairs};
 use llm_training::{TokenBatch, Trainer, WarmupCosineSchedule};
 
+/// The backend this binary was built with.
+///
+/// The example is built for exactly one backend, chosen by feature, so a
+/// measurement always names the path it actually ran on.
+#[cfg(feature = "cuda")]
+fn compute_device() -> Device {
+    Device::cuda(0)
+}
+#[cfg(feature = "wgpu")]
+fn compute_device() -> Device {
+    Device::wgpu(0)
+}
+#[cfg(feature = "cpu")]
+fn compute_device() -> Device {
+    Device::cpu()
+}
+#[cfg(feature = "flex")]
+fn compute_device() -> Device {
+    Device::flex()
+}
+
+/// Name of the backend this binary runs on.
+const BACKEND: &str = if cfg!(feature = "cuda") {
+    "cuda"
+} else if cfg!(feature = "wgpu") {
+    "wgpu"
+} else if cfg!(feature = "cpu") {
+    "cpu"
+} else {
+    "flex"
+};
+
 /// Reads an environment variable as a number, or uses the default.
 fn setting(name: &str, default: usize) -> usize {
     std::env::var(name)
@@ -46,7 +78,7 @@ fn main() {
     let steps = setting("STEPS", 2);
     let warmup = setting("WARMUP", 0);
 
-    let device = Device::flex().autodiff();
+    let device = compute_device().autodiff();
     llm_model::init::seed(&device, config.training.seed);
 
     let parameters = config
@@ -54,7 +86,7 @@ fn main() {
         .parameter_count()
         .expect("the configured model fits in u64");
     println!(
-        "model: {} parameters ({:.1}M), backend flex, precision {:?}",
+        "model: {} parameters ({:.1}M), backend {BACKEND}, precision {:?}",
         parameters,
         parameters as f64 / 1e6,
         config.runtime.precision

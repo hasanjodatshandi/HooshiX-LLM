@@ -63,6 +63,18 @@ pub enum ModelError {
         quantity: NumericalQuantity,
     },
 
+    /// The finiteness check could not be evaluated on this backend.
+    ///
+    /// Distinct from [`ModelError::NonFinite`] on purpose. Being unable to
+    /// perform a check is not the same as the check failing, and conflating the
+    /// two makes a healthy run refuse to train on a backend that merely does not
+    /// support one read-back form.
+    #[error("the {quantity} finiteness check could not be evaluated on this backend")]
+    CheckUnavailable {
+        /// Which quantity could not be checked.
+        quantity: NumericalQuantity,
+    },
+
     /// Every position in the loss mask was ignored.
     ///
     /// A fully masked batch means the batch carries no learning signal. It is a

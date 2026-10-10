@@ -160,9 +160,39 @@ synthetic batch:
 
 **What this does not say**
 
-- It says nothing about the `cpu` (CubeCL LLVM JIT) backend, which has not been
-  built: it fails to link on `simsimd.lib`. That backend is the obvious lever for
-  throughput and has not been measured at all.
 - It says nothing about any accelerator, because none is present.
 - No optimization may be justified by these numbers alone. They are a baseline,
   and section 8 still governs whether any change is kept.
+
+## 11. Second baseline: the `cpu` (CubeCL) backend
+
+Measured 2026-10-10 on the same machine, after the `cpu` backend was unblocked
+(see `13_DEPENDENCIES_AND_TOOLCHAIN.md` section 5). Same model, same
+configuration, same commit line; only the backend differs.
+
+| batch | sequence | flex tokens/s | cpu tokens/s | ratio |
+|---|---|---|---|---|
+| 8 | 512 | 51 | **70** | 1.37× |
+| 4 | 2048 | 54 | **64** | 1.19× |
+| 1 | 2048 | 51 | 41 | 0.80× |
+
+**Findings**
+
+- `cpu` is faster where there is enough work per step to keep the cores busy and
+  slower where there is not. At batch 1 it is 20% behind the reference path.
+- **The first step costs 9 to 18 minutes.** CubeCL compiles its kernels with LLVM
+  on first use: 735 s at batch 8 × sequence 512, 1082 s at batch 1 × 2048. This is
+  a one-time cost per shape and per process, and it dominates anything short. A
+  throughput figure taken from the first step would be wrong by two orders of
+  magnitude, which is why the benchmark reports warmup separately.
+- Both backends are within 1.4× of each other. The CPU path is a real but modest
+  improvement, not the order-of-magnitude change that would make the configured
+  Stage-1 run reachable: 1.64B tokens at 64 tokens/s is still about 296 days.
+
+**What this does not say**
+
+- `wgpu` and `cuda` are unmeasured. Neither has been built, because neither has
+  hardware here.
+- The batch 8 × sequence 2048 shape, which the reference path could not allocate,
+  was **not** attempted on `cpu`. Whether the CubeCL path fits where `flex` did
+  not is unknown and must not be assumed.

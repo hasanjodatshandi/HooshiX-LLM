@@ -149,23 +149,70 @@ A developer should enable the backend they need rather than compile all backends
 
 Always construct devices explicitly (`Device::flex()`, `Device::cuda(0)`). `Device::default()` chooses from the backends compiled into the binary, not from the hardware present, so enabling an additional backend through Cargo feature unification can silently change it. This also affects implicit device selection by `Tensor::from(...)` and dataloaders without `set_device(...)`.
 
-### CubeCL-backed backends: current link blocker
+### CubeCL-backed backends: the link blocker, and its resolution
 
-Verified 2026-10-10 by building each path separately:
+Verified 2026-10-10 by building each path separately.
 
-- The `flex` path pulls in **no CubeCL**, and its dependency graph contains no `turso` and no `simsimd`. It compiles, links, tests and runs.
-- Every CubeCL-backed path (`cpu`, `wgpu`, `cuda`) pulls `cubecl-environment`, which depends on `turso`, whose `turso_core` depends on the native `simsimd` crate. Linking `turso_sdk_kit` then fails with:
+**Original symptom.** Every CubeCL-backed path (`cpu`, `wgpu`, `cuda`) pulls
+`cubecl-environment`, which depends on `turso`, whose `turso_core` depends on the
+native `simsimd` crate. Linking `turso_sdk_kit` failed with:
 
-  ```text
-  LINK : fatal error LNK1181: cannot open input file 'simsimd.lib'
-  ```
+```text
+LINK : fatal error LNK1181: cannot open input file 'simsimd.lib'
+```
 
-Consequences for planning, not just for this machine:
+**`simsimd` was not the cause.** It was the last error to be printed, not the
+first failure. Two earlier blockers had to be cleared first, and clearing them
+made the `simsimd` error disappear without any change to that crate:
 
-- Only `flex` is a verified backend today. `cpu`, `wgpu` and `cuda` are **not run** until the native `simsimd` link problem is resolved; they must never be reported as passing.
-- This is broader than "no GPU". The performance CPU path (`cpu`) is blocked by the same native dependency, so the reference path cannot yet be replaced by it.
-- Because `flex` is CubeCL-free, Stage 1 correctness work is unaffected. Any section that needs the CubeCL CPU runtime — fused kernels, CubeCL benchmarking, or the Stage 2 optimized attention path — is gated on this first.
-- `simsimd` is a transitive native dependency of Burn/CubeCL, not a project dependency. Resolving it belongs to a dependency investigation with its own ADR, not to model or training code.
+1. **`liblzma-sys` could not link.** Its build script runs `lib.exe`, which
+   writes a temporary response file under `%TEMP%`; the build failed with
+   `LNK1104: cannot open file '...\Temp\lnk{GUID}.tmp'`. Redirecting `TEMP` and
+   `TMP` to a directory inside the workspace fixed it. Nothing in the project
+   depends on this; it is an environment property of the machine.
+2. **`tracel-llvm-bundler` could not install its toolchain.** The CubeCL CPU
+   backend needs a bundled LLVM, which the bundler downloads and unpacks into
+   `%LOCALAPPDATA%\tracel\tracel-llvm-23.1.0-3`. From inside a build script that
+   failed with `Access is denied. (os error 5)` on
+   `create_dir_all(%USERPROFILE%\.cache\tracel)`. Overriding `LOCALAPPDATA` does
+   not help, because `dirs::data_local_dir()` on Windows calls
+   `SHGetKnownFolderPath` and ignores the environment; overriding `USERPROFILE`
+   moves the cache but then `data_local_dir()` returns `None` and the bundler
+   reports `Unsupported system`.
+
+   The bundler skips installation entirely when its sentinel file exists, so the
+   bundle was installed outside the build: download
+   `windows-x64.tar.xz` from the `tracel-ai/tracel-llvm` `v23.1.0-3` release,
+   verify its SHA-256 against the published `windows-x64.checksums.json`,
+   extract it into `%LOCALAPPDATA%\tracel\`, and create the
+   `.tracel-llvm-installed` sentinel inside the extracted directory. The archive
+   hash matched exactly (`d0a548ee…35ee`, 56.9 MB, 680.6 MB extracted).
+
+   The bundler's own `content_sha256` tree check does not run when the sentinel
+   short-circuits it, so that verification was not performed.
+
+**Consequences for planning:**
+
+- `cpu` now builds, links, preflights and runs. It is no longer blocked.
+- `wgpu` and `cuda` share the same CubeCL base and are expected to build, but
+  neither has been built, because neither has hardware here. They remain
+  **not run**.
+- The workaround is per-machine, not per-repository. A fresh machine needs the
+  same three steps, or a writable `%LOCALAPPDATA%` for the build script. This
+  belongs in the environment setup notes, not in the crate graph.
+- `simsimd` is a transitive native dependency of Burn/CubeCL, not a project
+  dependency, and needed no change.
+
+**A separate defect this uncovered.** With `cpu` working, training refused every
+step with "the loss is not finite". The loss was finite; the finiteness check was
+wrong. See `crates/llm-model/src/grad.rs`: the original implementation combined
+boolean comparisons and read a boolean tensor back, and folded a read-back
+failure into "not finite". Reading a boolean tensor is not uniformly supported,
+so a backend that could not be *checked* was reported as one that had *failed*.
+The check is now arithmetic — the sum of `x * 0` is zero exactly when every
+element is finite — and an unevaluable check is its own error. This is recorded
+because the shape of the bug is general: a diagnostic that cannot run must never
+be indistinguishable from a diagnostic that ran and failed.
 
 ## 6. NVIDIA environment
 

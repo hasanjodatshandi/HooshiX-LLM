@@ -16,10 +16,20 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
+[features]
+# A binary needs exactly one execution backend, and so does the throughput
+# example. `flex` is the deterministic CPU reference path and the default; the
+# others are selected with `--no-default-features --features <name>`.
+default = ["flex"]
+flex = ["burn/flex"]
+cpu = ["burn/cpu"]
+cuda = ["burn/cuda"]
+wgpu = ["burn/wgpu"]
+
 [dev-dependencies]
-# Tests need a concrete backend before a `Device` can be built. Flex is the
-# project's reference path; see the note in `crates/llm-model/Cargo.toml`.
-burn = { workspace = true, features = ["flex"] }
+# Tests need a concrete backend before a `Device` can be built; the default
+# feature supplies it.
+burn = { workspace = true }
 
 [lints]
 workspace = true

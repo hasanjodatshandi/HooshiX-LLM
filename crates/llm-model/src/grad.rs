@@ -5,18 +5,28 @@
 //! lives here, next to the mathematics it guards, so the training crate does not
 //! have to reimplement it.
 //!
-//! # Why the check does not read the numbers out
+//! # Why the check is arithmetic rather than a comparison
 //!
-//! A check that converts a tensor to `f32` silently changes meaning the moment
-//! the working dtype changes. Instead this module asks the tensor two questions
-//! that are true exactly when a value is finite, and both hold for every float
-//! dtype:
+//! The obvious implementation compares each element with itself — `NaN` is the
+//! only value that is not equal to itself — and combines the boolean results
+//! into one flag that is then read back. That version was written first, and it
+//! was wrong in a way that only showed up on a second backend: reading a boolean
+//! tensor back is not uniformly supported, and the failure was being folded into
+//! "the values are not finite". A backend that could not be *checked* was
+//! therefore reported as a backend that had *failed*, and training refused every
+//! step on a perfectly healthy loss.
 //!
-//! - `x == x` is false exactly for `NaN`;
-//! - `x - x` is `NaN` exactly for an infinity, so `x - x == x - x` is false
-//!   exactly for an infinity.
+//! What is here instead uses only arithmetic, which every backend supports:
 //!
-//! The answer is reduced to a single flag on the device and read back once.
+//! - multiplying a finite value by zero gives zero, for either sign and for
+//!   subnormals;
+//! - multiplying `NaN` by zero gives `NaN`, and multiplying either infinity by
+//!   zero gives `NaN`.
+//!
+//! So the sum of `x * 0` is zero exactly when every element is finite. The sum
+//! cannot overflow, because every term is zero. And if the result cannot be read
+//! back at all, that is reported as its own error rather than as a failure of
+//! the values.
 
 use burn::tensor::Tensor;
 
@@ -27,24 +37,16 @@ pub fn ensure_finite<const D: usize>(
     values: &Tensor<D>,
     quantity: NumericalQuantity,
 ) -> Result<(), ModelError> {
-    // A value that is not equal to itself is NaN.
-    let self_equal = values.clone().equal(values.clone());
+    let probe = (values.clone() * 0.0).sum();
 
-    // A value whose self-subtraction is not equal to itself is an infinity.
-    let difference = values.clone() - values.clone();
-    let difference_equal = difference.clone().equal(difference);
-
-    let healthy = self_equal.bool_and(difference_equal);
-    let all_healthy = healthy.all();
-
-    let is_finite = all_healthy
+    let total = probe
         .to_data()
-        .try_to_vec::<bool>()
+        .try_to_vec::<f32>()
         .ok()
-        .and_then(|flags| flags.first().copied())
-        .unwrap_or(false);
+        .and_then(|values| values.first().copied())
+        .ok_or(ModelError::CheckUnavailable { quantity })?;
 
-    if is_finite {
+    if total.is_finite() {
         Ok(())
     } else {
         Err(ModelError::NonFinite { quantity })
