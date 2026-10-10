@@ -16,8 +16,9 @@
 
 use std::time::Instant;
 
+use burn::module::{Module, ModuleVisitor, Param};
 use burn::optim::grad_clipping::GradientClippingConfig;
-use burn::optim::{AdamWConfig, ModuleOptimizer};
+use burn::optim::{AdamWConfig, GradientsParams, ModuleOptimizer};
 use burn::tensor::{Bool, Int, Tensor};
 use llm_model::{ModelError, NumericalQuantity, Transformer, causal_lm_loss, ensure_finite};
 
@@ -170,34 +171,39 @@ impl Trainer {
         let tokens: u64 = batches.iter().map(TokenBatch::tokens).sum();
         let started = Instant::now();
 
-        let objective = accumulated_loss(&model, batches);
-        let objective = match objective {
-            Ok(objective) => objective,
-            Err(error) => {
-                let metrics = StepMetrics {
-                    step: index + 1,
-                    learning_rate,
-                    train_loss: f32::NAN,
-                    validation_loss: None,
-                    gradient_norm: None,
-                    tokens,
-                    step_millis: elapsed_millis(started),
-                    skipped: true,
-                };
-                self.log.record(metrics);
-                self.steps += 1;
-                return Err(error);
-            }
-        };
+        let mut gradients: Option<GradientsParams> = None;
+        let mut total_loss = 0.0_f64;
 
-        let gradients = objective.backward();
-        let gradients = burn::optim::GradientsParams::from_grads(gradients, &model);
+        for batch in batches {
+            match micro_batch(&model, batch, batches.len(), &mut gradients) {
+                Ok(loss) => total_loss += f64::from(loss),
+                Err(error) => {
+                    let metrics = StepMetrics {
+                        step: index + 1,
+                        learning_rate,
+                        train_loss: f32::NAN,
+                        validation_loss: None,
+                        gradient_norm: None,
+                        tokens,
+                        step_millis: elapsed_millis(started),
+                        skipped: true,
+                    };
+                    self.log.record(metrics);
+                    self.steps += 1;
+                    return Err(error);
+                }
+            }
+        }
+
+        // `batches` is not empty, so the loop above ran at least once and
+        // produced gradients.
+        let gradients = gradients.ok_or(TrainingError::NoBatches)?;
         let updated = self.optimizer.step(learning_rate, model, gradients);
 
         let metrics = StepMetrics {
             step: index + 1,
             learning_rate,
-            train_loss: measure(&objective).unwrap_or(f32::NAN),
+            train_loss: (total_loss / batches.len() as f64) as f32,
             validation_loss: None,
             // Burn applies the clipping but does not report the norm it saw.
             // Reporting it needs a per-parameter gradient iteration path that
@@ -263,38 +269,84 @@ impl Trainer {
     }
 }
 
-/// Mean loss over a group of batches, with the finiteness check applied.
+/// Runs one micro-batch: forward, objective, check, backward, accumulate.
 ///
-/// The mean, not the sum, so that the number a run reports does not depend on
-/// how many micro-batches were grouped into a step.
-fn accumulated_loss(
+/// Returns the loss that was measured, before the scaling applied for the
+/// backward pass.
+///
+/// # Why one backward per micro-batch
+///
+/// Summing the micro-batch objectives and taking a single backward pass gives
+/// the correct gradient but keeps every micro-batch's graph alive at once, so
+/// peak memory is the whole group rather than one member. That is what made the
+/// configured batch 8 at sequence 2048 impossible to allocate: one layer's
+/// attention scores alone are 1.6 GB, and there are twelve of them.
+///
+/// Backwarding each micro-batch and summing the gradients costs one extra pass
+/// over the parameters and divides peak activation memory by the number of
+/// micro-batches, which is the entire point of accumulating.
+fn micro_batch(
     model: &Transformer,
-    batches: &[TokenBatch],
-) -> Result<Tensor<1>, TrainingError> {
-    let mut total: Option<Tensor<1>> = None;
+    batch: &TokenBatch,
+    count: usize,
+    accumulated: &mut Option<GradientsParams>,
+) -> Result<f32, TrainingError> {
+    let logits = model.forward(batch.input.clone(), 0)?;
+    let loss = causal_lm_loss(logits, batch.target.clone(), batch.mask.clone())?;
 
-    for batch in batches {
-        let logits = model.forward(batch.input.clone(), 0)?;
-        let loss = causal_lm_loss(logits, batch.target.clone(), batch.mask.clone())?;
-
-        // The finiteness check happens before the backward pass: a non-finite
-        // gradient would be written into every parameter by the step that
-        // follows, and the corruption only becomes visible much later.
-        if let Err(error) = ensure_finite(&loss, NumericalQuantity::Loss) {
-            return Err(match error {
-                ModelError::NonFinite { quantity } => NonFiniteLoss { quantity }.into(),
-                other => other.into(),
-            });
-        }
-
-        total = Some(match total {
-            Some(sum) => sum + loss,
-            None => loss,
+    // The finiteness check happens before the backward pass: a non-finite
+    // gradient would be written into every parameter by the step that follows,
+    // and the corruption only becomes visible much later.
+    if let Err(error) = ensure_finite(&loss, NumericalQuantity::Loss) {
+        return Err(match error {
+            ModelError::NonFinite { quantity } => NonFiniteLoss { quantity }.into(),
+            other => other.into(),
         });
     }
 
-    let count = batches.len() as f64;
-    total.map(|sum| sum / count).ok_or(TrainingError::NoBatches)
+    let measured = measure(&loss).ok_or(NonFiniteLoss {
+        quantity: NumericalQuantity::Loss,
+    })?;
+
+    // Scaling here makes the accumulated gradient the gradient of the mean over
+    // the group, which is what the single-backward version produced.
+    let scaled = loss / count as f64;
+    let incoming = GradientsParams::from_grads(scaled.backward(), model);
+
+    let mut visitor = Accumulate {
+        incoming: &incoming,
+        accumulated,
+    };
+    model.visit(&mut visitor);
+
+    Ok(measured)
+}
+
+/// Adds one micro-batch's gradients into the running total.
+///
+/// `GradientsParams` has no addition operator, so the sum is built by visiting
+/// the model's parameters and combining each one. The visit is generic over the
+/// tensor rank, which is what makes it possible without knowing the model's
+/// shapes here.
+struct Accumulate<'a> {
+    incoming: &'a GradientsParams,
+    accumulated: &'a mut Option<GradientsParams>,
+}
+
+impl ModuleVisitor for Accumulate<'_> {
+    fn visit_float<const D: usize>(&mut self, parameter: &Param<Tensor<D>>) {
+        let id = parameter.id;
+        let Some(gradient) = self.incoming.get::<D>(id) else {
+            return;
+        };
+
+        let total = self.accumulated.get_or_insert_with(GradientsParams::new);
+        let combined = match total.get::<D>(id) {
+            Some(previous) => previous + gradient,
+            None => gradient,
+        };
+        total.register(id, combined);
+    }
 }
 
 /// Mean loss over a group of batches, without touching the optimizer.

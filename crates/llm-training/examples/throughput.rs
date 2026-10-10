@@ -20,6 +20,14 @@
 // `clippy.toml` relaxes the panic family for tests only.
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
+/// Measures whether the allocator is on the critical path.
+///
+/// A model step allocates constantly, so a better allocator is a plausible
+/// win. It is behind a feature so the same example can be built both ways.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::time::Instant;
 
 use burn::tensor::{Device, Int, Tensor, TensorData};
@@ -43,6 +51,10 @@ fn compute_device() -> Device {
 fn compute_device() -> Device {
     Device::cpu()
 }
+#[cfg(feature = "ndarray")]
+fn compute_device() -> Device {
+    Device::ndarray()
+}
 #[cfg(feature = "flex")]
 fn compute_device() -> Device {
     Device::flex()
@@ -55,6 +67,8 @@ const BACKEND: &str = if cfg!(feature = "cuda") {
     "wgpu"
 } else if cfg!(feature = "cpu") {
     "cpu"
+} else if cfg!(feature = "ndarray") {
+    "ndarray"
 } else {
     "flex"
 };
@@ -98,18 +112,37 @@ fn main() {
 
     // A synthetic batch. This is a throughput measurement, not a data test, so
     // the ids only need to be in range.
-    let tokens: Vec<i32> = (0..(batch * (sequence + 1)))
-        .map(|index| (index % config.model.vocab_size) as i32)
-        .collect();
-    let window =
-        Tensor::<2, Int>::from_data(TensorData::new(tokens, [batch, sequence + 1]), &device);
-    let (input, target) = next_token_pairs(window).expect("more than one token");
+    //
+    // `ACCUM` splits the same total number of tokens into that many
+    // micro-batches, which is how gradient accumulation is exercised: the
+    // effective batch is unchanged, but only one micro-batch's activations are
+    // alive at a time.
+    let accumulation = setting("ACCUM", 1);
+    assert!(
+        accumulation >= 1 && batch.is_multiple_of(accumulation),
+        "ACCUM must divide the batch evenly"
+    );
+    let micro = batch / accumulation;
     let batch_tokens = batch * sequence;
-    let example = TokenBatch {
-        input,
-        target,
-        mask: all_positions(batch, sequence, &device),
-    };
+
+    let mut example = Vec::with_capacity(accumulation);
+    for part in 0..accumulation {
+        let tokens: Vec<i32> = (0..(micro * (sequence + 1)))
+            .map(|index| ((part * micro * sequence + index) % config.model.vocab_size) as i32)
+            .collect();
+        let window =
+            Tensor::<2, Int>::from_data(TensorData::new(tokens, [micro, sequence + 1]), &device);
+        let (input, target) = next_token_pairs(window).expect("more than one token");
+        example.push(TokenBatch {
+            input,
+            target,
+            mask: all_positions(micro, sequence, &device),
+        });
+    }
+
+    if accumulation > 1 {
+        println!("accumulating {accumulation} micro-batches of {micro}");
+    }
 
     let schedule = WarmupCosineSchedule::new(
         config.training.optimizer.learning_rate,
@@ -125,7 +158,7 @@ fn main() {
     for step in 0..(warmup + steps) {
         let started = Instant::now();
         let (updated, metrics) = trainer
-            .step(model, std::slice::from_ref(&example))
+            .step(model, &example)
             .unwrap_or_else(|error| panic!("step {step} failed: {error}"));
         model = updated;
         let elapsed = started.elapsed().as_secs_f64();

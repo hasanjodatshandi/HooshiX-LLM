@@ -15,6 +15,7 @@ burn = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+mimalloc = { version = "0.1", optional = true }
 
 [features]
 # A binary needs exactly one execution backend, and so does the throughput
@@ -25,6 +26,11 @@ flex = ["burn/flex"]
 cpu = ["burn/cpu"]
 cuda = ["burn/cuda"]
 wgpu = ["burn/wgpu"]
+# Experiment only: the ndarray backend, which is the only path to a real BLAS.
+ndarray = ["burn/ndarray"]
+# Experiment only: swaps the system allocator in the throughput example, so the
+# allocator can be measured without changing the library crates.
+mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
 # Tests need a concrete backend before a `Device` can be built; the default

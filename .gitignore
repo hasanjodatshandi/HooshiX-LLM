@@ -1,5 +1,9 @@
-# Build output
-/target
+# Build output.
+#
+# The `target*/` form also covers the per-experiment build directories that
+# benchmarking creates (`target-native`, `target-cpu`, ...). Ignoring only
+# `/target` once let several thousand build artifacts into a commit.
+/target*/
 
 # Training data and checkpoints are never committed.
 /artifacts/*
