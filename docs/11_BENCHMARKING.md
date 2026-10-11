@@ -293,7 +293,9 @@ term is also what makes the configured shape impossible to allocate.
 
 **What has not been tried**
 
-- ~~A real BLAS.~~ Attempted; see section 14.
+- ~~A real BLAS.~~ **Attempted properly; Burn 0.22 has no path to one.** See
+  section 16. The earlier entry here was wrong: nothing had been built when it
+  was written.
 - ~~`burn-fusion`~~ Attempted; see section 14.
 - ~~A tiled attention that never materialises the score matrix.~~ Attempted,
   measured and **reverted**; see section 14.
@@ -432,3 +434,62 @@ the write variance above rather than a property of the format.
   `2 × 256`; `bench` was not built for `wgpu` in this pass.
 - Binary size is for `bench.exe` alone, at 11.83 MiB in release. The other
   binaries were not measured.
+
+## 16. A real BLAS: attempted properly, and Burn 0.22 has no path to one
+
+Section 14 listed "a real BLAS" as attempted. That entry was wrong — nothing had
+been built. It has now been built, and the answer is a well-evidenced no.
+
+**The route that exists.** `burn-flex` has **no BLAS feature at all**: its
+features are `std`, `simd`, `rayon`, `x86-v4`, `apple-amx`, `fft`, `tracing`,
+`critical-section`, and its GEMM is the pure-Rust `gemm` crate. The only backend
+with a BLAS feature is `burn-ndarray`, which offers `blas-openblas`,
+`blas-openblas-system`, `blas-netlib` and `blas-accelerate`.
+
+**The blocker, and the way around it.** On Windows MSVC,
+`openblas-src`'s `system` mode calls `vcpkg::find_package("openblas")` and is the
+**only** route it offers — `OPENBLAS_PATH` is ignored, and the evidence is the
+panic: `VcpkgNotFound("No vcpkg installation found")`. Rather than install vcpkg,
+prebuilt `OpenBLAS-0.3.34-x64` was downloaded, and because `blas-src`'s build
+script panics only when *more than one* provider is enabled — zero providers
+compiles cleanly and emits no link flags — the library was linked directly with
+`RUSTFLAGS="-L native=<openblas>/lib -l openblas"`. The import library needed
+renaming from `libopenblas.lib` to `openblas.lib`, which is the name rustc asks
+MSVC for. It built, and the example ran.
+
+**The result, and why it is not a BLAS result:**
+
+| shape | `flex` + `gemm` | `ndarray` + "BLAS" |
+|---|---|---|
+| 8 × 512 | **186 tok/s** | 141 tok/s |
+| 2 × 256 | **120 tok/s** | 98 tok/s |
+| 1 × 512 | 43 tok/s | **94 tok/s** |
+
+These are not BLAS figures, because **BLAS was never called**:
+
+- `libopenblas.dll` is not in the running process's module list.
+- The executable's dependent-DLL table contains no `libopenblas.dll` at all —
+  only system libraries. The import was never referenced, so the linker dropped
+  it.
+- `OPENBLAS_NUM_THREADS=1` and `=16` produced 137 and 142 tokens/s, which is
+  noise. If BLAS were computing the GEMMs, thread count would matter.
+- `burn-ndarray`'s source imports `ndarray` for containers — `Array2`, `ArrayD`,
+  `ArrayView`, `Zip` — and never `ndarray::linalg::Dot`. Its matmul is its own.
+
+So enabling `ndarray/blas` compiles, links and changes nothing: **Burn's ndarray
+backend does not route its GEMMs through ndarray's BLAS-backed path.** The
+measurement above is "ndarray's own GEMM against `flex`'s `gemm` crate", and in
+that comparison `flex` wins at large batches and loses at small ones.
+
+**What this means.** There is no configuration of Burn 0.22 that puts a tuned
+BLAS under the tensor matmul. Reaching one means either a Burn release that wires
+ndarray's `Dot` in, or a custom kernel — and section 13's finding stands unchanged:
+attention and the GEMMs beneath it are the cost, and the reference path is what
+this project has.
+
+The experiment's code was reverted. Keeping a feature named `ndarray-blas-system`
+that provably does not engage a BLAS would be worse than not having it.
+
+**Corrected:** the line in section 13 that read "needs a real GEMM — a BLAS, or
+attention built on one — and neither was reached here" is now precise: a BLAS was
+reached, linked, and is unreachable from Burn's tensor operations.
