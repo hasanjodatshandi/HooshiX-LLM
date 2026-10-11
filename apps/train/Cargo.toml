@@ -22,7 +22,15 @@ burn = { workspace = true }
 
 [features]
 # Exactly one backend feature must be enabled. `flex` is the deterministic
-# CPU reference path. Use `--no-default-features` when selecting another.
+# CPU reference path and the default. Use `--no-default-features` when selecting
+# another.
+#
+# `cpu` is the CubeCL LLVM-JIT backend. It is correct and it builds, but it
+# measured about three times slower than `flex` on the Stage-1 model, and its
+# first step costs nine to eighteen minutes of kernel compilation. Selecting it
+# is a deliberate act: the binary warns at startup with the numbers, because
+# choosing it by accident looks exactly like the model being slow.
+# See docs/11_BENCHMARKING.md sections 11 and 14.
 default = ["flex"]
 flex = ["burn/flex"]
 cpu = ["burn/cpu"]

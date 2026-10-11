@@ -68,6 +68,10 @@ fn main() -> ExitCode {
         }
     }
 
+    if let Some(caveat) = device::backend_caveat() {
+        eprintln!("llm-train: warning: {caveat}");
+    }
+
     let report = match training::run(&config, &compute_device) {
         Ok(report) => report,
         Err(error) => {

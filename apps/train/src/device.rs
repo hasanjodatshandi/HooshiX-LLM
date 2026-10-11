@@ -86,6 +86,38 @@ pub fn build_device(requested: BackendChoice) -> Device {
     }
 }
 
+/// A measured caveat about the backend this binary was built with, if any.
+///
+/// # Why this is a warning and not a refusal
+///
+/// A slower backend is still a correct one. The CubeCL CPU backend produces the
+/// same results as the reference path — that is tested — and removing the
+/// ability to select it would remove the ability to measure it, which is how the
+/// numbers below were obtained in the first place.
+///
+/// What should not happen is choosing it by accident and concluding that the
+/// model is slow. So the choice is reported with the measurement that makes it
+/// a choice.
+#[must_use]
+pub const fn backend_caveat() -> Option<&'static str> {
+    #[cfg(feature = "cpu")]
+    {
+        Some(
+            "this binary runs on the CubeCL `cpu` backend. On the Stage-1 model it \
+             measured about three times slower than the Flex reference path (72 against \
+             235 tokens/s at batch 8 x sequence 512), and it compiles its kernels with \
+             LLVM on first use, which costs nine to eighteen minutes before the first \
+             step completes. It is correct, and it is slower. See \
+             docs/11_BENCHMARKING.md section 11. Build with the default `flex` feature \
+             unless you are deliberately measuring this backend.",
+        )
+    }
+    #[cfg(not(feature = "cpu"))]
+    {
+        None
+    }
+}
+
 /// Failure while proving that the selected backend can execute a tensor
 /// operation.
 #[derive(Debug, thiserror::Error)]
