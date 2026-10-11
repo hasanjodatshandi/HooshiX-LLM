@@ -9,6 +9,7 @@ use burn::module::Module;
 use burn::tensor::{Device, Int, Tensor};
 use llm_core::ModelConfig;
 
+use crate::attention::AttentionMode;
 use crate::block::TransformerBlock;
 use crate::embedding::TokenEmbedding;
 use crate::error::ModelError;
@@ -22,6 +23,10 @@ pub struct Transformer {
     embedding: TokenEmbedding,
     blocks: Vec<TransformerBlock>,
     final_norm: RmsNorm,
+    /// Which way every block scores the sequence. Not a parameter and not
+    /// persisted, so it is skipped by the module traversal.
+    #[module(skip)]
+    attention_mode: AttentionMode,
 }
 
 impl Transformer {
@@ -30,6 +35,18 @@ impl Transformer {
     /// The configuration is validated first, so an incoherent architecture fails
     /// before a parameter is allocated.
     pub fn new(config: &ModelConfig, device: &Device) -> Result<Self, ModelError> {
+        Self::with_attention_mode(config, AttentionMode::default(), device)
+    }
+
+    /// Builds the model described by `config`, scoring attention `mode`'s way.
+    ///
+    /// The default is [`AttentionMode::Whole`], so a caller that does not ask
+    /// for the tiled path does not get it.
+    pub fn with_attention_mode(
+        config: &ModelConfig,
+        mode: AttentionMode,
+        device: &Device,
+    ) -> Result<Self, ModelError> {
         config
             .validate()
             .map_err(|error| ModelError::InvalidConfig {
@@ -56,13 +73,16 @@ impl Transformer {
 
         let mut blocks = Vec::with_capacity(config.num_layers);
         for _ in 0..config.num_layers {
-            blocks.push(TransformerBlock::new(config, head_dim, &rope, device));
+            blocks.push(TransformerBlock::with_attention_mode(
+                config, head_dim, &rope, mode, device,
+            ));
         }
 
         Ok(Self {
             embedding: TokenEmbedding::new(config.vocab_size, config.hidden_size, device),
             blocks,
             final_norm: RmsNorm::new(config.hidden_size, config.rms_norm_eps, device),
+            attention_mode: mode,
         })
         .inspect(|model| {
             // Burn draws parameters lazily. Forcing the draw here means the
@@ -70,6 +90,25 @@ impl Transformer {
             // else happened to read the device's random source first.
             crate::init::materialize(model);
         })
+    }
+
+    /// Returns this model scoring attention `mode`'s way.
+    ///
+    /// Applied to a model that already exists, so a caller holding one set of
+    /// weights can measure both paths without rebuilding it.
+    #[must_use]
+    pub fn with_mode(mut self, mode: AttentionMode) -> Self {
+        for block in &mut self.blocks {
+            block.set_attention_mode(mode);
+        }
+        self.attention_mode = mode;
+        self
+    }
+
+    /// Which way this model scores attention.
+    #[must_use]
+    pub const fn attention_mode(&self) -> AttentionMode {
+        self.attention_mode
     }
 
     /// Number of decoder blocks.

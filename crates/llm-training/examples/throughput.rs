@@ -14,6 +14,26 @@
 //! benchmark that reports a number for the actual configured architecture is
 //! worth more than an estimate, and it is what a Stage-1 run plan has to be
 //! built on.
+//!
+//! # \(ATTENTION\)
+//!
+//! `ATTENTION` selects the attention path and defaults to `whole`, the path this
+//! repository has always used:
+//!
+//! | value | what it scores with |
+//! |---|---|
+//! | `whole` | this repository's whole-matrix attention, `[batch, heads, s, s]` |
+//! | `burn` | `burn::tensor::module::attention`, which each backend implements |
+//!
+//! Both are the same binary, so a comparison between them is a comparison of the
+//! scoring paths and not of two builds:
+//!
+//! ```text
+//! $env:ATTENTION="burn"; cargo run --release -p llm-training --example throughput
+//! ```
+//!
+//! The weights are seeded from the configuration, so the runs also start from
+//! the same parameters.
 
 // An example aborts on failure rather than returning an error: there is no
 // caller to hand a failure to, and the panic message names the cause.
@@ -32,7 +52,7 @@ use std::time::Instant;
 
 use burn::tensor::{Device, Int, Tensor, TensorData};
 use llm_core::ExperimentConfig;
-use llm_model::{Transformer, all_positions, next_token_pairs};
+use llm_model::{AttentionMode, Transformer, all_positions, next_token_pairs};
 use llm_training::{TokenBatch, Trainer, WarmupCosineSchedule};
 
 /// The backend this binary was built with.
@@ -83,6 +103,20 @@ fn setting(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+/// Which attention path to build the model on.
+///
+/// `whole` is the whole-matrix path this repository has always used and the
+/// default; `burn` hands the block to Burn's own backend-dispatched attention,
+/// which is the one that can reach a fused kernel. Anything else is refused
+/// rather than silently measured as one of them.
+fn attention_mode() -> AttentionMode {
+    match std::env::var("ATTENTION").as_deref() {
+        Ok("burn") => AttentionMode::Burn,
+        Ok("whole") | Err(_) => AttentionMode::Whole,
+        Ok(other) => panic!("ATTENTION must be `whole` or `burn`, not {other:?}"),
+    }
+}
+
 fn main() {
     let config_path =
         std::env::var("CONFIG").unwrap_or_else(|_| "configs/stage1-110m.toml".to_owned());
@@ -109,7 +143,10 @@ fn main() {
     );
     println!("batch {batch}, sequence {sequence}, {steps} timed steps");
 
-    let model = Transformer::new(&config.model, &device)
+    let mode = attention_mode();
+    println!("attention: {mode:?}");
+
+    let model = Transformer::with_attention_mode(&config.model, mode, &device)
         .unwrap_or_else(|error| panic!("the configured model is not valid: {error}"));
 
     // A synthetic batch. This is a throughput measurement, not a data test, so

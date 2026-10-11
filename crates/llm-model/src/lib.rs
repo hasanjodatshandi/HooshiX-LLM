@@ -41,7 +41,7 @@ pub mod transformer;
 #[cfg(test)]
 pub(crate) mod testing;
 
-pub use attention::MultiHeadAttention;
+pub use attention::{AttentionMode, MultiHeadAttention, attend_burn};
 pub use block::TransformerBlock;
 pub use causal_mask::causal_mask;
 pub use embedding::TokenEmbedding;

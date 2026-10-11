@@ -282,8 +282,13 @@ language-model head, the objective and the optimizer — is about 15%.
 
 Cutting the vocabulary fourfold saves 14% of the step. The vocabulary is 32768
 against a hidden size of 768, so the head alone is 25.2M of the 110.1M
-parameters, and it is the single largest tensor in the step: the score tensor at
-batch 8 × sequence 512 is `8 × 512 × 32768 × 4` bytes = 537 MB per pass.
+parameters, and it is the single largest tensor in the step: the **logits**
+tensor at batch 8 × sequence 512 is `8 × 512 × 32768 × 4` bytes = 537 MB per
+pass, and the objective's `log_softmax` holds a copy of it at the same size. That
+figure is not the attention score tensor, which at this shape is
+`8 × 12 × 512 × 512 × 4` = 100 MB; the two happen to be the same order only
+because this sequence is short. Section 17 confirms by measurement that the
+logits tensor, not attention, is what sets the GPU's ceiling.
 
 At sequence 2048 the same model reaches **139 tokens/s** against **235** at
 sequence 512 — both measured back to back, so this comparison does hold — which
@@ -297,9 +302,14 @@ term is also what makes the configured shape impossible to allocate.
   section 16. The earlier entry here was wrong: nothing had been built when it
   was written.
 - ~~`burn-fusion`~~ Attempted; see section 14.
-- ~~A tiled attention that never materialises the score matrix.~~ Attempted,
-  measured and **reverted**; see section 14.
+- ~~A tiled attention that never materialises the score matrix.~~ **Delivered,
+  measured, and removed.** It was correct and it lost on every comparable shape;
+  see section 17. The useful part of that result is negative and is recorded
+  there: the 1024-token ceiling is the logits tensor, not attention.
 - ~~Any alternative allocator.~~ Attempted; see section 14.
+- ~~Using Burn's own attention instead of hand-rolling one.~~ **Delivered**; see
+  section 17. It reproduces this repository's logits exactly and does not move
+  the GPU ceiling, so it is an equivalence result and not a speedup.
 
 ## 14. Six candidate optimizations, measured
 
@@ -494,71 +504,198 @@ that provably does not engage a BLAS would be worse than not having it.
 attention built on one — and neither was reached here" is now precise: a BLAS was
 reached, linked, and is unreachable from Burn's tensor operations.
 
-## 17. Block-tiled attention: attempted, not correct, reverted, and the pitfalls recorded
+
+## 17. Attention: a tiled path that was correct, measured, and removed; and Burn's own
 
 Section 13 and section 6 both name attention as roughly 40% of a step, and
 attention is what forces the `[batch, heads, sequence, sequence]` score tensor
 into memory — 1.6 GB at the configured shape, which is the allocation that fails
-on both the CPU and the 4 GB GPU. A block-tiled attention that never materialises
-that tensor is therefore the obvious next move, and it was attempted.
+on both the processor and the 4 GB GPU. Two attempts followed from that. **One
+was removed after measuring it. The other is kept and is an exact-equivalence
+result, not a speedup.**
 
-**It was not delivered.** The implementation was written — query-dimension
-blocking, online softmax with a running max, sum and output accumulator,
-`TILE_QUERY_ROWS = 128`, a feature threaded through `llm-training`, and six
-correctness tests — and it **failed its own correctness test**, so it was never
-measured and every change was reverted. `git status --porcelain -uall` is empty.
+### The tiled path: correct, measured, removed
 
-**This is not a "slower everywhere" result.** Nothing about its speed was
-established. It is "not implemented correctly yet", and the two must not be
-confused, because the failing version would have produced plausible-looking
-throughput figures for wrong logits.
+A block-tiled attention was written for the second time and this time it was
+**correct**: it never materialises the whole score block, and its logits and its
+parameter gradients match the whole-matrix path element by element. It was then
+measured, and it lost on every shape where the two can be compared:
 
-### The failure
+| shape | backend | whole | tiled | tiled is |
+|---|---|---|---|---|
+| 2 × 256 | `flex` | 4.41 s/step, 116 tok/s | 4.68 s/step, 109 tok/s | 6% slower |
+| 1 × 512 | `flex` | 4.35 s/step, 118 tok/s | 6.20 s/step, 83 tok/s | 42% slower |
+| 8 × 512 | `flex` | 22.20 s/step, 185 tok/s | 40.03 s/step, 102 tok/s | 80% slower |
+| 2 × 512 | `wgpu` | 0 timed steps (OOM) | 3 timed steps, 244–277 tok/s | — |
 
-Wrong logits for the **first row of every query tile**, in the multi-tile case
-only. With `tile_rows = sequence` — one tile — the tiled path matched the
-reference exactly and the parameter gradients matched to `0.0`, which is what
-localises the fault to the tile boundary rather than to the arithmetic.
+The one row that favours it is not worth having. Tiled does not unlock a shape
+that is otherwise unreachable **and worth reaching**: at 2 × 512 on the GPU it
+completes 244–277 tokens/s, against **457 tokens/s at 1 × 512 on the same GPU,
+which the whole path already runs**. It unlocks a shape that is slower per token
+than one that already works. The 13% peak-memory saving it does deliver at
+8 × 512 — 8385 MB against 9680 MB — does not change whether anything runs.
 
-### The five pitfalls, which are the expensive part and are worth keeping
+**It was therefore deleted**, along with `TILE_QUERY_ROWS` and its tests. A
+second attention implementation is a permanent maintenance cost and this one
+bought nothing measurable. The measurement is recorded here rather than the code
+kept, because the result is the valuable part.
 
-Each of these was found by fixing it and watching the failure move:
+### The four faults found on the way, two of which are Burn traps
+
+The first attempt at this was wrong and was reverted. The second attempt found
+three faults, each of which kept the failure in the same place — the first row of
+every query tile — until all three were fixed:
 
 1. **The mask offset must be anchored to the tile's first query row**, as
-   `key_start + shift - start`. Variants that anchor it anywhere else put the
-   causal diagonal in the wrong place, and only for the leading row.
-2. **The online-softmax rescale factor must use the *running* maximum, not the
-   current block's maximum.** Using the block maximum scales the accumulated
-   output by the wrong constant and the result comes out about 3× too large.
-3. **`f32::MIN - finite` overflows to `-inf`.** Clamping a block maximum with
-   `f32::MIN` therefore poisons an entire row. The clamp belongs on the *shifted*
-   score: `(scores - block_max).clamp_min(f32::MIN).exp()`.
-4. **An all-masked row makes `exp(-inf - -inf)` produce `NaN`**, which needs an
-   explicit all-masked zero factor rather than relying on the arithmetic.
-5. **`last_index` must be a key *index*, not a key *position*.** The two differ
-   by `key_length - sequence`, and the difference is invisible in the
-   single-tile case.
+   `key_start + shift - start` where `shift` is the absolute position of that
+   row. Anchor it anywhere else and the causal diagonal lands in the wrong place,
+   and only the leading row of each tile shows it.
+2. **The online-softmax shift must be the *larger* of the block maximum and the
+   running maximum.** A block whose maximum is below the running one must be
+   scaled against the running one, or its best entry gets a factor of one and
+   takes a share of the row it has not earned. But the running maximum alone is
+   not safe either: a block that masks a row entirely has `-inf` for both, and
+   `-inf - -inf` is a NaN that the zero factor meant to erase it does not clear.
+3. **`Tensor::max_pair` is not a maximum.** Its mask is `self.lower(other)`, so it
+   keeps `self` wherever the two are equal **and wherever `self` is NaN**. A
+   running maximum built from it silently kept a stale value: no error, no NaN,
+   just a wrong answer. This is a trap in the framework, and it is why
+   `attention.rs` no longer calls it.
+4. **`Tensor::tril_mask` masks nothing when the block is taller than it is
+   wide.** `tril_mask([2, 1], 0)` masks nothing, where the causal answer masks the
+   second row's only entry. That is exactly the shape of a query tile's last key
+   block, which is why the fault lands on the tile's leading row. The removed
+   path built its mask by comparing absolute positions instead; a test compared
+   the two constructions at the shapes where they can differ.
 
-### A measurement correction, and a caution about measuring while building
+### Burn's own attention: exact equivalence, not a speedup
 
-A concurrent session recorded `1 × 512` on `wgpu` failing with
-`wgpu error: Out of memory` and concluded the GPU ceiling had fallen since
-section 14. That conclusion was wrong, and the cause was the measuring
-environment: another process was deleting a 42 GB build directory at the same
-time. Re-measured on a quiet machine, the same binary gives **382 tokens/s** at
-`1 × 512` and **479 tokens/s** at `2 × 256`, which reproduces the recorded 383
-and is consistent with 514. The section 14 figures stand.
+`burn-tensor` 0.22 exposes `burn::tensor::module::attention` — a **public,
+backend-dispatched** scaled-dot-product attention taking `(query, key, value,
+mask, attn_bias, options)`. `burn-flex` auto-selects between `attention_naive`
+and `attention_flash` (KV-tiled, online softmax, `TILE_KV` scratch per row) by
+the size of the score block; `burn-cubecl`, which is what `wgpu` and `cpu` use,
+calls `cubek::attention::forward`, a fused kernel. The model now reaches it
+through `AttentionMode::Burn`, selectable with `ATTENTION=burn`.
 
-The lesson is section 12's, one level down: a measurement taken while the machine
-is busy is not a measurement. This is the second time in this document that a
-concurrent workload produced a false result, and the first time it produced a
-false *regression* — a number that was wrong in the pessimistic direction is no
-more trustworthy than one that was wrong in the optimistic direction.
+**It reproduces this repository's logits exactly — a difference of `0.0`, not
+merely within tolerance.** Burn defaults the scale to `1 / sqrt(head_dim)`, the
+same value used here, and its mask convention is the same one (`true` means "set
+to `-inf` before the softmax"), so `causal_mask` is handed over unchanged. The
+KV-cache path is untouched: `forward_cached` builds on the whole path, and the
+existing test that compares cached logits against uncached ones is green.
 
-### What a follow-up needs
+**Do not cite this as a win.** It is an equivalence result. It measured **1%
+slower on `flex` at 2 × 256** and equal at the shapes where both completed, and
+on the GPU it does not raise the ceiling either — at 2 × 512 it completes zero
+timed steps, exactly like the whole path. On a machine that drifted 53% during
+the session that measured it, 1% is noise, so **`Whole` remains the default**.
+Changing the default on this measurement would repeat the mistake section 12 had
+to retract. The decision needs a re-measurement on a quiet machine; if Burn's
+attention then measures equal or faster it should obviously win, because it is
+less code here and is covered by Burn's own backend test suite rather than by
+this repository's.
 
-Either finish it — the reproduction is
-`cargo test -p llm-model --features tiled-attention` failing on
-`tiled_attention_reproduces_the_whole_matrix_logits` — or abandon it explicitly
-in an ADR. Do not report a `wgpu` throughput figure for the tiled path until that
-command is green.
+### The 1024-token ceiling is not about attention
+
+This is the most useful negative result in the section, and it **confirms the
+prediction in section 13**.
+
+`4 × 256`, `2 × 512` and `1 × 1024` — every 1024-token micro-batch — run out of
+memory on the **first** step on **both** paths, including the block-tiled path
+that never materialises the score matrix at all. Attention is therefore not what
+sets the ceiling. The allocation that fails is the **logits tensor**: at
+`batch × sequence × vocab × 4` bytes, `1 × 1024 × 32768 × 4` is 128 MB per pass
+and `8 × 2048 × 32768 × 4` is 2.1 GB, and the objective's `log_softmax` holds a
+copy of it at the same size. Section 13 named that tensor as the single largest
+one in the step and measured the vocabulary as the lever that moves it; this
+section confirms it by removing attention from the list of suspects.
+
+**Where not to look:** tiling attention, replacing attention with a kernel, or
+any other attention optimization will not move this ceiling. The next lever is
+the vocabulary (section 14 measured that curve) or the logits and loss path
+itself.
+
+### Measurements
+
+**`flex` (processor)**, 5 timed steps after 2 warmup.
+
+| shape | path | s/step | tokens/s | peak RSS |
+|---|---|---|---|---|
+| 2 × 256 | whole | 4.41 | 116 | 2089 MB |
+| 2 × 256 | whole | 4.37 | 117 | 2111 MB |
+| 2 × 256 | burn | 6.77 | 76 | 2119 MB |
+| 1 × 512 | whole | 4.35 | 118 | 2337 MB |
+| 1 × 512 | burn | 7.78 | 66 | 2351 MB |
+| 8 × 512 | whole | 22.20 | 185 | 9680 MB |
+
+**The `flex` absolutes are not trustworthy, and this session is the third time
+that has bitten this document.** The same binary measured `2 × 256` at
+4.41 s/step early in the session and 6.77 s/step an hour later — a **53% drift**
+with nothing else running, on a machine whose power plan is a third-party
+"Driver Booster" scheme rather than a Windows one. Only the **alternating
+ratios** are usable: whole and burn were run alternately from one binary at each
+shape, so a drift in the machine lands on both. The absolute column is
+indicative. Against the 120 tokens/s section 14 records for 2 × 256, the `whole`
+row reproduces.
+
+**`wgpu` (GPU, AMD Radeon R9 200 Series, 4 GB)**, 5 timed steps after 3 warmup.
+The first step of a wgpu run compiles shaders and takes 87–400 s; it is never
+counted.
+
+| shape | path | timed steps completed | tokens/s |
+|---|---|---|---|
+| 2 × 256 | whole | 5 | 414 |
+| 2 × 256 | burn | 5 | 411 |
+| 1 × 512 | whole | 3 | 457 |
+| 1 × 512 | burn | 1 | 394 |
+| 2 × 512 | whole | 0 | — |
+| 2 × 512 | burn | 0 | — |
+| 4 × 256 / 2 × 512 / 1 × 1024 | both | 0 | — |
+
+"Timed steps completed" is its own column because an out-of-memory condition on
+this backend is **not immediately fatal and not reliably fatal at the same
+place**. The device runner thread panics with `wgpu error: Out of Memory`, the
+process prints whatever steps it finished and then stops, and the count varies
+between runs of the same binary at the same shape: `1 × 512` on the whole path
+completed 1, 2 and 3 timed steps in three runs. The binary's own `at batch …`
+summary line averages only the steps that survived and therefore is not
+comparable across rows; the table does not use it.
+
+The recorded GPU figures hold: section 14 records 382 tokens/s at `1 × 512` and
+479 at `2 × 256`; this session measures 457 and 414.
+
+### A note on RMSNorm, which was checked and not changed
+
+**Read from source, not measured.** Burn 0.22 does expose `burn::nn::RmsNorm` /
+`RmsNormConfig`, and its forward pass is the same decomposition into separate
+elementwise operations this repository hand-wrote:
+
+```rust
+let rms = (x.clone().cast(DType::F32).square().mean_dim(D - 1) + self.epsilon).sqrt();
+(x / rms.cast(dtype)) * self.gamma.val().unsqueeze()
+```
+
+The one difference does not help: Burn casts to f32 and back, this repository
+computes in the model dtype.
+
+**There is no fused RMSNorm hook in Burn 0.22 at all.** `ModuleOps` has hooks for
+`attention` and `layer_norm` and nothing for RMS normalisation, and a search for
+`rms_norm` across the vendored `burn-flex`, `burn-backend` and `burn-cubecl`
+sources finds no implementation. The fused kernel at
+`burn-flex/src/ops/activation.rs` is `layer_norm` — a mean/variance
+normalisation, reachable as `burn::tensor::module::layer_norm` — and it is **not
+reachable from an RMS normalisation**. The lever is closed: replacing this
+repository's `RmsNorm` with Burn's would be a rewrite of identical arithmetic
+with no backend kernel behind it.
+
+### What is still not answered
+
+- Whether `wgpu` ever reaches `cubek::attention::forward` at these shapes, or
+  whether the mask argument routes it down a fallback. Not established.
+- Whether an allocator, a smaller vocabulary, or gradient checkpointing moves the
+  logits-tensor ceiling. Section 14 measured two of those and this section does
+  not revisit them.
+- Whether Burn's attention beats the whole path on a quiet machine. It is 1%
+  slower here, which is inside the drift, and the default decision waits on that
+  re-measurement.

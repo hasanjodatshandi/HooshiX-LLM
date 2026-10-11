@@ -16,7 +16,7 @@ use burn::module::Module;
 use burn::tensor::{Device, Tensor};
 use llm_core::ModelConfig;
 
-use crate::attention::MultiHeadAttention;
+use crate::attention::{AttentionMode, MultiHeadAttention};
 use crate::error::ModelError;
 use crate::kv_cache::LayerCache;
 use crate::rms_norm::RmsNorm;
@@ -40,6 +40,18 @@ impl TransformerBlock {
     /// dimensions is where transposed sizes hide.
     #[must_use]
     pub fn new(config: &ModelConfig, head_dim: usize, rope: &Rope, device: &Device) -> Self {
+        Self::with_attention_mode(config, head_dim, rope, AttentionMode::default(), device)
+    }
+
+    /// Creates a block whose attention scores the sequence `mode`'s way.
+    #[must_use]
+    pub fn with_attention_mode(
+        config: &ModelConfig,
+        head_dim: usize,
+        rope: &Rope,
+        mode: AttentionMode,
+        device: &Device,
+    ) -> Self {
         Self {
             attention_norm: RmsNorm::new(config.hidden_size, config.rms_norm_eps, device),
             attention: MultiHeadAttention::new(
@@ -49,7 +61,8 @@ impl TransformerBlock {
                 config.linear_bias,
                 rope,
                 device,
-            ),
+            )
+            .with_mode(mode),
             ffn_norm: RmsNorm::new(config.hidden_size, config.rms_norm_eps, device),
             ffn: SwiGlu::new(
                 config.hidden_size,
@@ -58,6 +71,17 @@ impl TransformerBlock {
                 device,
             ),
         }
+    }
+
+    /// Returns this block scoring attention `mode`'s way.
+    pub fn set_attention_mode(&mut self, mode: AttentionMode) {
+        self.attention = self.attention.clone().with_mode(mode);
+    }
+
+    /// Which way this block scores attention.
+    #[must_use]
+    pub const fn attention_mode(&self) -> AttentionMode {
+        self.attention.mode()
     }
 
     /// Applies the block to `[batch, sequence, hidden]`.
