@@ -191,6 +191,7 @@ fn run(arguments: &Arguments) -> ExitCode {
     let reason = match generation.stop {
         StopReason::EndOfSequence => "end of sequence",
         StopReason::MaxNewTokens => "token budget reached",
+        StopReason::Cancelled => "cancelled",
     };
     eprintln!(
         "generate-cli: {} tokens from step {}, stopped by {reason}",

@@ -42,6 +42,8 @@ pub enum StopReason {
     EndOfSequence,
     /// The token budget ran out.
     MaxNewTokens,
+    /// The caller asked for it to stop.
+    Cancelled,
 }
 
 /// What generation produced.
@@ -78,6 +80,24 @@ pub fn generate(
     device: &Device,
     random: &mut impl RandomSource,
 ) -> Result<Generation, InferenceError> {
+    generate_streaming(model, prompt, config, device, random, |_| true)
+}
+
+/// Continues `prompt`, handing each produced token to `on_token` as it is made.
+///
+/// Returning `false` from `on_token` stops generation immediately. That is the
+/// cancellation path: a client that has gone away drops its receiver, the caller
+/// turns that into a `false`, and the loop stops instead of computing tokens
+/// nobody will read. Cancellation is checked between tokens, which is the
+/// granularity a single-token forward pass allows.
+pub fn generate_streaming(
+    model: &Transformer,
+    prompt: &[u32],
+    config: &GenerationConfig,
+    device: &Device,
+    random: &mut impl RandomSource,
+    mut on_token: impl FnMut(u32) -> bool,
+) -> Result<Generation, InferenceError> {
     if prompt.is_empty() {
         return Err(InferenceError::EmptyPrompt);
     }
@@ -91,6 +111,11 @@ pub fn generate(
     for _ in 0..config.max_new_tokens {
         let scores = last_scores(&logits)?;
         let next = sample(&scores, config.sampling, random)?;
+
+        if !on_token(next) {
+            stop = StopReason::Cancelled;
+            break;
+        }
         produced.push(next);
 
         if config.eos_token == Some(next) {
@@ -175,6 +200,60 @@ mod tests {
         let _guard = exclusive();
         llm_model::init::seed(device, 0xC0FFEE);
         Transformer::new(&tiny_config(), device).expect("valid config")
+    }
+
+    #[test]
+    fn returning_false_from_the_callback_stops_generation() {
+        // The cancellation contract. A caller that has lost its client returns
+        // false, and the loop must stop rather than finish work nobody will
+        // read — which is what keeps a disconnected request from occupying the
+        // server's only generation slot.
+        use super::{StopReason, generate_streaming};
+
+        let device = Device::flex();
+        let model = model(&device);
+        let config = GenerationConfig {
+            max_new_tokens: 32,
+            ..GenerationConfig::default()
+        };
+        let mut random = SeededRandom::new(1);
+        let mut offered = 0_usize;
+
+        let generation =
+            generate_streaming(&model, &[1, 2, 3], &config, &device, &mut random, |_| {
+                offered += 1;
+                // Accept the first two, refuse the third.
+                offered < 3
+            })
+            .expect("valid");
+
+        assert_eq!(generation.stop, StopReason::Cancelled);
+        assert_eq!(
+            generation.tokens.len(),
+            2,
+            "the refused token must not be reported as produced"
+        );
+        assert_eq!(offered, 3, "generation must stop at the refusal");
+    }
+
+    #[test]
+    fn a_callback_that_never_refuses_runs_to_the_budget() {
+        use super::{StopReason, generate_streaming};
+
+        let device = Device::flex();
+        let model = model(&device);
+        let config = GenerationConfig {
+            max_new_tokens: 5,
+            ..GenerationConfig::default()
+        };
+        let mut random = SeededRandom::new(1);
+
+        let generation =
+            generate_streaming(&model, &[1, 2, 3], &config, &device, &mut random, |_| true)
+                .expect("valid");
+
+        assert_eq!(generation.stop, StopReason::MaxNewTokens);
+        assert_eq!(generation.tokens.len(), 5);
     }
 
     #[test]

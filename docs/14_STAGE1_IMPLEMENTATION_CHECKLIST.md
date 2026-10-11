@@ -569,17 +569,72 @@ Notes (2026-10-10) — all ten items complete:
 
 ## L. Serving
 
-- [ ] Axum app state.
-- [ ] one-time model load.
-- [ ] readiness/liveness endpoints.
-- [ ] `/v1/completions`.
-- [ ] streaming response.
-- [ ] prompt/output token limits.
-- [ ] bounded concurrency.
-- [ ] cancellation.
-- [ ] graceful shutdown.
+- [x] Axum app state.
+- [x] one-time model load.
+- [x] readiness/liveness endpoints.
+- [x] `/v1/completions`.
+- [x] streaming response.
+- [x] prompt/output token limits.
+- [x] bounded concurrency.
+- [x] cancellation.
+- [x] graceful shutdown.
 
 **Acceptance:** server never reloads model per request and survives basic concurrency tests.
+
+**MET (2026-10-11).** All nine items complete; 15 tests in `llm-server` plus a
+live run.
+
+- New crate `crates/llm-server` (routing, limits, state, errors) and
+  `apps/serve` (the composition root). Generation moved to a streaming entry
+  point, `llm_inference::generate_streaming`, so that a token can be emitted as
+  it is produced and so that cancellation has somewhere to happen.
+- **The model is loaded once.** `AppState` holds it in an `Arc`, built by the
+  composition root before the listener exists. There is no code path that
+  constructs a `Transformer` inside a handler, which is what the acceptance
+  criterion asks for and is enforced by construction rather than by discipline.
+- **Readiness is earned, not assumed.** The server starts unready and becomes
+  ready only after a real self-test generation through the real path. A model
+  that loaded is not a model that works: a shape error or a backend that cannot
+  execute an operation appears on the first forward pass, and traffic must not
+  arrive before that. Liveness deliberately does *not* depend on readiness — a
+  server whose model failed to load is still alive, and reporting it as dead
+  would have an orchestrator restart it into the same failure.
+- **Generation runs on `spawn_blocking`.** A forward pass holds its thread for
+  the whole step; running it inside a Tokio task blocks a runtime worker, and a
+  runtime with fewer workers than concurrent requests stops answering health
+  checks exactly when they are needed.
+- **Cancellation is structural, not a flag.** The slot permit is moved into the
+  blocking task, so capacity is released when the work ends — including when it
+  is cancelled. In the streaming path the client's receiver *is* the signal: when
+  it drops, `blocking_send` fails, the callback returns `false`, and the loop
+  stops instead of computing tokens into a socket nobody reads. The contract is
+  tested directly: two tokens accepted, the third refused, `StopReason::Cancelled`,
+  and the refused token is not reported as produced.
+- **Shutdown is a parameter, not a keypress.** `llm_server::serve` takes the
+  shutdown future rather than calling `ctrl_c` internally, so stopping is
+  something a test can do. The first attempt to verify it live used `taskkill`,
+  which does not deliver `Ctrl+C`, so the drain message never appeared — the test
+  method was wrong, not the code, and rather than assert it the design was
+  changed until it could be tested. `the_server_answers_over_a_socket_and_stops_when_asked`
+  binds a real port, makes a real HTTP request over a real socket, sends the
+  signal and requires the task to finish.
+- **Verified live**, not only in-process: the server started against
+  `target/tmp/checkpoints/checkpoint-0000000100`, passed its self-test, answered
+  `GET /health/live` and `GET /health/ready` with `200`, returned
+  `{"text":" lototot","tokens":[224,79,82,87,82,87,82,87],"stop_reason":"max_new_tokens","prompt_tokens":10}`
+  from `POST /v1/completions`, streamed SSE frames with
+  `content-type: text/event-stream`, refused a negative temperature and an
+  oversized token budget with `400` and a message naming the limit, and answered
+  `429` to the second of two concurrent requests against a one-slot server. Two
+  runs of the same request produced byte-identical output.
+- `GET /health/live`, `GET /health/ready` and `POST /v1/completions` are the
+  whole surface. No chat endpoint: a base pretraining model is not an instruction
+  follower, and `09_INFERENCE_AND_SERVING.md` section 7 defers that until a chat
+  template and a post-trained model exist.
+- Unknown fields in a request body are accepted, unlike a configuration
+  document. A wire boundary and an operator's file are different trust surfaces:
+  an unknown key in a config means the operator believes a setting is in effect
+  that is not, while a client sending one extra key is not making that mistake.
 
 ## M. Benchmark baseline
 

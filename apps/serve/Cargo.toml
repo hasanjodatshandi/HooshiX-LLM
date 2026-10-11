@@ -1,0 +1,37 @@
+[package]
+name = "serve"
+description = "Composition root for the inference server."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+llm-core = { workspace = true }
+llm-checkpoint = { workspace = true }
+llm-model = { workspace = true }
+llm-tokenizer = { workspace = true }
+llm-inference = { workspace = true }
+llm-server = { workspace = true }
+burn = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+thiserror = { workspace = true }
+
+[features]
+# Exactly one backend feature must be enabled. `flex` is the deterministic CPU
+# reference path and the default.
+#
+# `cpu` is the CubeCL LLVM-JIT backend: correct, but measured about three times
+# slower than `flex` on the Stage-1 model, with nine to eighteen minutes of
+# kernel compilation before the first token. See docs/11_BENCHMARKING.md.
+default = ["flex"]
+flex = ["burn/flex"]
+cpu = ["burn/cpu"]
+cuda = ["burn/cuda"]
+wgpu = ["burn/wgpu"]
+
+[lints]
+workspace = true

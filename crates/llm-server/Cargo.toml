@@ -1,0 +1,32 @@
+[package]
+name = "llm-server"
+description = "HTTP surface for inference: routing, limits, streaming and lifecycle."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+llm-core = { workspace = true }
+llm-inference = { workspace = true }
+llm-model = { workspace = true }
+llm-tokenizer = { workspace = true }
+burn = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+futures-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# Tests need a concrete backend before a `Device` can be built.
+burn = { workspace = true, features = ["flex"] }
+tokio = { workspace = true, features = ["rt", "macros"] }
+# `ServiceExt::oneshot` drives the router without opening a socket.
+tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true

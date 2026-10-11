@@ -21,5 +21,5 @@ pub mod generator;
 pub mod sampling;
 
 pub use error::InferenceError;
-pub use generator::{Generation, GenerationConfig, StopReason, generate};
+pub use generator::{Generation, GenerationConfig, StopReason, generate, generate_streaming};
 pub use sampling::{RandomSource, SamplingConfig, SeededRandom, sample};

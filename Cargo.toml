@@ -27,6 +27,8 @@ members = [
     "crates/llm-training",
     "crates/llm-inference",
     "crates/llm-checkpoint",
+    "crates/llm-server",
+    "apps/serve",
 ]
 
 [workspace.package]
@@ -61,6 +63,23 @@ sha2 = "0.10"
 # --- Command-line interfaces ----------------------------------------------
 clap = { version = "4", features = ["derive"] }
 
+# --- Serving ---------------------------------------------------------------
+# Axum owns routing and HTTP; Tokio owns I/O orchestration. Neither touches
+# tensor work directly, which is why generation runs on a blocking thread and
+# the async runtime only moves bytes.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+    "signal",
+    "sync",
+    "time",
+    "net",
+    "io-util",
+] }
+tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
+futures-core = "0.3"
+
 # --- Typed library errors -------------------------------------------------
 thiserror = "2"
 
@@ -72,6 +91,7 @@ llm-tokenizer = { path = "crates/llm-tokenizer" }
 llm-training = { path = "crates/llm-training" }
 llm-inference = { path = "crates/llm-inference" }
 llm-checkpoint = { path = "crates/llm-checkpoint" }
+llm-server = { path = "crates/llm-server" }
 
 [workspace.lints.rust]
 # `unsafe` is prohibited in project code by default.
