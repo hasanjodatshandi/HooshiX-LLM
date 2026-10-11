@@ -599,21 +599,24 @@ That expectation was wrong, and the correction is the main result here.
 
   Five parts in ten million is f32 rounding, not a discrepancy. Build and run
   with `--features flex,wgpu`.
-- **Throughput on the GPU**, measured against the reference path in the same
-  session:
+- **Throughput on the GPU**, measured **at the same shape** on both backends,
+  which an earlier version of this note failed to do:
 
-  | shape | `wgpu` | `flex` |
-  |---|---|---|
-  | batch 1 × sequence 128 | 0.54 s, 238 tok/s | — |
-  | batch 1 × sequence 256 | 0.64 s, 400 tok/s | — |
-  | batch 2 × sequence 256 | 1.01 s, **508 tok/s** | 237 tok/s |
-  | batch 1 × sequence 512 | **out of memory** | — |
+  | shape | `flex` (CPU) | `wgpu` (GPU) | |
+  |---|---|---|---|
+  | 2 × 256 | 120 tok/s | **514 tok/s** | 4.3× |
+  | 1 × 512 | 43 tok/s | **383 tok/s** | 8.9× |
+  | 8 × 512 | **186 tok/s** | out of memory | — |
 
-  A 2013-era card is **more than twice** the CPU reference path. It is also
-  memory-bound long before the CPU is: 4 GB holds the model, its gradients and
-  AdamW's moments at about 1.8 GB, and the score tensor at sequence 512 does not
-  fit beside them. Section 7's finding that the configured shape is a memory
-  problem applies to the GPU more sharply than to the CPU.
+  The first version compared the GPU at 2 × 256 against the CPU at 8 × 512 —
+  512 tokens per step against 4096 — and reported "more than twice". At equal
+  work it is 4.3× to 8.9×. The CPU is poor at small batches; the GPU is not
+  merely competitive. It is memory-bound long before the CPU is: 4 GB holds the
+  model, its gradients and AdamW's moments at about 1.8 GB, and the score tensor
+  at sequence 512 does not fit beside them. Section 7's finding that the
+  configured shape is a memory problem applies to the GPU more sharply than to
+  the CPU, and the 136-day figure for that shape is a reference-path figure the
+  GPU cannot improve.
 - **A defect this exposed.** The first GPU run failed inside `ensure_finite` with
   a panic, not a returned error, because it read the result back with `to_data`,
   which panics when the device has died. That erases exactly the distinction the

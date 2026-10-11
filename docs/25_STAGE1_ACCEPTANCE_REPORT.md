@@ -136,8 +136,27 @@ input:
 | gradients | 151872 | 2.38e-7 | 0 |
 
 Both are f32 rounding. `parameters without a gradient: reference 0, accelerated 0`.
-The GPU is also faster: 514 tokens/s at `2 × 256` against 237 on the reference
-path.
+
+**The GPU is 4.3× to 8.9× the reference path at the same shape.** Measured back
+to back, same model, same tokens per step:
+
+| shape | `flex` (CPU) | `wgpu` (GPU) | |
+|---|---|---|---|
+| 2 × 256 | 120 tok/s | **514 tok/s** | 4.3× |
+| 1 × 512 | 43 tok/s | **383 tok/s** | 8.9× |
+| 8 × 512 | **186 tok/s** | out of memory | — |
+
+An earlier version of this report compared 514 tokens/s on the GPU against 237 on
+the reference path and called the GPU "also faster". That comparison was between
+**different shapes** — 512 tokens per step against 4096 — and it understated the
+result by a wide margin. At equal work the GPU wins by 4.3× to 8.9×, and it is the
+CPU that is poor at small batches rather than the GPU being merely competitive.
+
+**The limit is memory, not speed.** The card caps at 512 tokens per micro-batch
+and cannot run sequence 1024 at any batch size, so it cannot run the configured
+Stage-1 shape at all. The 136-day figure is a **reference-path** figure for that
+shape, and this GPU cannot improve it. On a card with enough memory the same code
+would be several times faster; on this one it is faster only where it fits.
 
 **CUDA and ROCm are Not run.** No NVIDIA card is present, and ROCm does not
 support this card's generation. `wgpu` was built and measured; `cuda` and `wgpu`
