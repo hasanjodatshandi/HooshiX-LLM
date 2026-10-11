@@ -197,51 +197,77 @@ configuration, same commit line; only the backend differs.
   was **not** attempted on `cpu`. Whether the CubeCL path fits where `flex` did
   not is unknown and must not be assumed.
 
-## 12. Third baseline: the compiler flags were the largest single cost
+## 12. A withdrawn claim: the compiler flags changed nothing
 
-Measured 2026-10-10. Same model, same backend (`flex`), same commit. Only the
-build changed.
+**This section replaces an earlier one that reported a 4.4× speedup from build
+flags. That claim does not survive a back-to-back measurement and is withdrawn.
+It is kept here, in corrected form, because the failure is instructive.**
 
-Rust's default target for `x86_64-pc-windows-msvc` is the `x86-64` baseline,
-which means **SSE2 only** — no AVX2, no FMA. The matrix kernels in `gemm`/`pulp`
-select their implementation from the target features the crate was compiled
-with, so the default build cannot use them.
+The original sequence was measured across several hours, with each row built and
+run at a different time:
 
-| build | batch 8 × seq 512 | batch 1 × seq 2048 | batch 4 × seq 2048 |
-|---|---|---|---|
-| default release | 80.8 s, 51 tok/s | 39.9 s, 51 tok/s | 151.5 s, 54 tok/s |
-| `target-cpu=native` | 33.2 s, 123 tok/s | — | — |
-| `+ lto=fat, codegen-units=1, panic=abort` | **18.2 s, 225 tok/s** | **16.6 s, 123 tok/s** | **67.8 s, 121 tok/s** |
+| build | batch 8 × seq 512 | reported |
+|---|---|---|
+| default release | 80.8 s | 51 tok/s |
+| `-C target-cpu=native` | 33.2 s | 123 tok/s |
+| `+ lto=fat, codegen-units=1, panic=abort` | 18.2 s | 225 tok/s |
 
-**Result: 4.4× on the same hardware and the same code.** The configured run of
-1.64B tokens falls from about 365 days to about 67 days at the measured shapes.
+That reads as a clean 4.4×. It is not. Rebuilt and re-measured **back to back, in
+one session, alternating between the two binaries**:
 
-Notes:
+| build | batch 8 × seq 512 | tokens/s |
+|---|---|---|
+| default profile, current code | 17.27 s | **237** |
+| `lto=fat`, one codegen unit, current code | 17.04 s | **240** |
+| default profile, **code as it was before any of this work** (`5204457`) | 17.19 s | **238** |
+| current code, immediately after | 17.23 s | **238** |
 
-- Repeats are stable under the final flags (18.02–18.31 s over five steps).
-  The `target-cpu=native`-only run varied between 27 s and 39 s across steps, so
-  the split between "native" and "LTO" is not measured cleanly; only the
-  combination is. Treat 4.4× as the result and the intermediate row as
-  indicative.
-- `panic = "abort"` changes behaviour, not just speed: a panic no longer unwinds,
-  so a test harness cannot catch it. It is acceptable for a training binary and
-  is **not** acceptable for the test profile.
-- These flags make the binary non-portable. They belong in the release profile of
-  the applications, documented, with the default kept for CI and for anything
-  distributed — not in the workspace defaults.
-- `batch 8 × sequence 2048` still aborts, and the message now names the cause:
-  `memory allocation of 1610612736 bytes failed`. That is exactly one layer's
-  attention score tensor, `8 × 12 × 2048 × 2048 × 4` bytes = 1.61 GB, which
-  autodiff then retains for all twelve layers. The configured shape is a
-  **memory** problem, not a speed problem, and it is fixed by tiling attention
-  or by accumulating gradients over a smaller micro-batch.
+Three conclusions, in order of how uncomfortable they are:
+
+1. **The build flags are worth about one percent**, which is inside the noise, and
+   cost a release rebuild going from ninety seconds to seven minutes.
+   `docs/11` section 8 says an optimization stays only if it improves the metric,
+   so no profile override was added.
+2. **The "before" number of 51 tokens/s was wrong.** The same code path, on the
+   same machine, measures 238 today. Whatever produced 51 was a property of that
+   moment — the machine, a background load, a build state — and not of the code.
+   It was never reproducible and should not have been published as a baseline.
+3. **The performance work in this session improved nothing.** A worktree of the
+   code as it stood before any of it measures the same 238 tokens/s as the code
+   now. The gains claimed for `target-cpu=native`, LTO and the finiteness-check
+   rewrite are all withdrawn.
+
+The machine carries a background load throughout — a VPN client, two editor
+instances and a device-sync service, together holding roughly 30% of the CPU. Any
+cross-run comparison on this machine is therefore unreliable, and only
+measurements taken **within one run** or **alternating between binaries** mean
+anything. Section 6 already said to hold everything but the variable constant;
+what this shows is that "the same machine" is not sufficient when the machine is
+shared.
+
+What survives:
+
+- `batch 8 × sequence 2048` aborts on allocation, and the message names the
+  cause: `memory allocation of 1610612736 bytes failed`. That is exactly one
+  layer's attention score tensor, `8 × 12 × 2048 × 2048 × 4` bytes = 1.61 GB,
+  which autodiff then retains for all twelve layers. The configured shape is a
+  **memory** problem, not a speed problem, and it is fixed by accumulating
+  gradients over a smaller micro-batch — which is verified in section 14.
+- `-C target-cpu=native` is a real lever in principle, because Rust's default
+  x86-64 target enables only SSE2 and the kernels in `gemm`/`pulp` select their
+  implementation at compile time. It did not reproduce as a speedup here, and the
+  honest position is that it is untested rather than that it works.
 
 ## 13. Fourth baseline: where the time goes
 
-Measured with the final flags above, by ablating the configuration. The
-configuration is read at run time, so no rebuild was needed.
+Measured by ablating the configuration. The configuration is read at run time, so
+no rebuild is needed and **every row below comes from one binary in one run**,
+which is why the ratios can be trusted even though section 12 shows that
+absolute figures on this machine cannot be compared across runs.
 
-At batch 8 × sequence 512, where the whole model costs 18.40 s per step:
+At batch 8 × sequence 512, where the whole model cost 18.40 s per step in that
+run (the same shape measures 17.2 s today, so treat the absolute column as
+indicative and the ratios as the result):
 
 | ablation | parameters | step | tokens/s |
 |---|---|---|---|
@@ -259,10 +285,11 @@ against a hidden size of 768, so the head alone is 25.2M of the 110.1M
 parameters, and it is the single largest tensor in the step: the score tensor at
 batch 8 × sequence 512 is `8 × 512 × 32768 × 4` bytes = 537 MB per pass.
 
-At sequence 2048 the same model reaches only 123 tokens/s against 225 at
-sequence 512, so the quadratic term in attention costs about 45% of the step at
-the configured length. That is the second lever, and the first one is memory:
-that term is also what makes the configured shape impossible to allocate.
+At sequence 2048 the same model reaches **139 tokens/s** against **235** at
+sequence 512 — both measured back to back, so this comparison does hold — which
+puts the quadratic term in attention at roughly **40% of a step** at the
+configured length. That is the second lever, and the first one is memory: that
+term is also what makes the configured shape impossible to allocate.
 
 **What has not been tried**
 
@@ -274,9 +301,11 @@ that term is also what makes the configured shape impossible to allocate.
 
 ## 14. Six candidate optimizations, measured
 
-Every row below was measured on the same machine, at batch 8 × sequence 512
-unless stated, against the 18.2 s / 225 tokens/s baseline of section 12. An
-optimization is kept only if it improves the intended metric, per section 8.
+Every row below was measured at batch 8 × sequence 512 unless stated, against the
+baseline of section 12. Some rows were measured against a baseline taken in a
+different run, so for those the ratio is the result and the absolute column is
+indicative — section 12 explains why. An optimization is kept only if it improves
+the intended metric, per section 8.
 
 | # | Candidate | Result | Kept |
 |---|---|---|---|
@@ -290,13 +319,13 @@ optimization is kept only if it improves the intended metric, per section 8.
 **Where this leaves the configured run**
 
 The configured Stage-1 shape now runs, which it did not before this work. At
-batch 8 × sequence 2048 it produces 120 tokens/s, so 1.64B tokens is about
-**158 days** on this machine — against about 365 days for the original build at
-the shapes it could actually run, and against "cannot run at all" for the
-configured shape.
+batch 8 × sequence 2048 it produces **139 tokens/s**, so 1.64B tokens is about
+**136 days** on this machine, against "cannot run at all" before.
 
-The remaining gap is not in the framework. It is that a 110M model at sequence
-2048 spends about 45% of its step on the quadratic term in attention, and that
-the step runs at roughly 150–230 GFLOP/s against a machine peak near
-1.5 TFLOP/s. Closing either gap needs a real GEMM — a BLAS, or attention that
-uses one — and neither was reached here.
+That is the substantive result of this session, and it is a **correctness** result
+rather than a speed one. No optimization tried here made the model faster; see
+section 12. The remaining gap is that a 110M model at sequence 2048 spends
+roughly 40% of its step on the quadratic term in attention, and that the step
+runs at a small fraction of what the machine can do in principle. Closing either
+needs a real GEMM — a BLAS, or attention built on one — and neither was reached
+here.

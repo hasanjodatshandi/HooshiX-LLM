@@ -79,6 +79,23 @@ unsafe_code = "deny"
 # Public APIs carry documentation.
 missing_docs = "warn"
 
+# Release profile.
+#
+# No override. `lto = "fat"` with one codegen unit was tried and compared back to
+# back against the default profile on the same machine in the same session:
+# 240 tokens/s against 237, a difference inside the run-to-run noise, for a
+# release rebuild that goes from about ninety seconds to about seven minutes.
+#
+# `docs/11_BENCHMARKING.md` section 8 says an optimization stays only if it
+# improves the intended metric on the target hardware. This one does not, so the
+# defaults stay and the measurement is recorded in section 12 instead.
+#
+# One lever is worth knowing and is deliberately not set here:
+# `-C target-cpu=native` lets the matrix kernels in `gemm`/`pulp` select wider
+# SIMD implementations, because Rust's default x86-64 target enables only SSE2.
+# It is left to the caller because it ties the binary to one machine. Measure
+# before believing it: in this session it did not reproduce as a speedup either.
+
 [workspace.lints.clippy]
 # The panic family is not an error-handling strategy on production paths.
 # `clippy.toml` re-allows these inside tests.
