@@ -45,7 +45,9 @@ fn compute_device() -> Device {
 }
 #[cfg(feature = "wgpu")]
 fn compute_device() -> Device {
-    Device::wgpu(0)
+    // The WGPU backend picks its adapter from device settings rather than from
+    // an index, so the default kind is the one that enumerates them.
+    Device::wgpu(Default::default())
 }
 #[cfg(feature = "cpu")]
 fn compute_device() -> Device {

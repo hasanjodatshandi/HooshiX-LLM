@@ -559,13 +559,74 @@ Notes (2026-10-10) — all ten items complete:
 
 ## K. GPU/backend parity
 
-- [ ] Run reference model on CPU.
-- [ ] Run same weights/input on target GPU.
-- [ ] Compare logits/loss within dtype tolerance.
+- [x] Run reference model on CPU.
+- [x] Run same weights/input on target GPU.
+- [x] Compare logits/loss within dtype tolerance.
 - [ ] Compare selected gradients.
-- [ ] Document unsupported backend/dtype combinations.
+- [x] Document unsupported backend/dtype combinations.
 
 **Acceptance:** parity report committed/generated.
+
+**PARTIALLY MET (2026-10-11).** Four of five items. This section was expected to
+be unrunnable because the machine has no NVIDIA card and CUDA is NVIDIA-only.
+That expectation was wrong, and the correction is the main result here.
+
+- **The machine has a GPU, and it works.** `AMD Radeon R9 200 Series`
+  (device `0x6810`, GCN 1st generation, 4 GB), driver 27.20.20912.1002, reporting
+  Vulkan 1.2.170 and enumerating as `PHYSICAL_DEVICE_TYPE_DISCRETE_GPU`.
+  CUDA does not apply to it, and ROCm does not support GCN 1st generation — but
+  `wgpu` does, because it goes through Vulkan/DX12 rather than a vendor runtime.
+- **`wgpu` had been written off as blocked and is not.** It was never built,
+  because the `simsimd` and LLVM blockers stopped every CubeCL path at the same
+  point; section 13 section 5 removed those, and `wgpu` then built in 8.5 minutes
+  and ran first time. It was never retested after the blockers fell, and it should
+  have been.
+- **End to end on the GPU:** `apps/train` ran the full smoke configuration on
+  `wgpu` — 100 steps, four checkpoints, zero refused or abandoned steps, exit 0.
+- **Parity, same weights and same input.** `crates/llm-training/examples/parity.rs`
+  writes the weights once from the reference path and reads them back on both
+  devices, because two devices seeded identically do *not* produce the same
+  weights — the random source belongs to the device. Comparing two runs that each
+  trained from their own seed would measure the seeds, not the backends.
+  Result, on the smoke architecture:
+
+  ```text
+  elements         = 10240
+  worst absolute   = 4.991889e-7
+  worst relative   = 1.6346176e-3
+  non-finite pairs = 0
+  ```
+
+  Five parts in ten million is f32 rounding, not a discrepancy. Build and run
+  with `--features flex,wgpu`.
+- **Throughput on the GPU**, measured against the reference path in the same
+  session:
+
+  | shape | `wgpu` | `flex` |
+  |---|---|---|
+  | batch 1 × sequence 128 | 0.54 s, 238 tok/s | — |
+  | batch 1 × sequence 256 | 0.64 s, 400 tok/s | — |
+  | batch 2 × sequence 256 | 1.01 s, **508 tok/s** | 237 tok/s |
+  | batch 1 × sequence 512 | **out of memory** | — |
+
+  A 2013-era card is **more than twice** the CPU reference path. It is also
+  memory-bound long before the CPU is: 4 GB holds the model, its gradients and
+  AdamW's moments at about 1.8 GB, and the score tensor at sequence 512 does not
+  fit beside them. Section 7's finding that the configured shape is a memory
+  problem applies to the GPU more sharply than to the CPU.
+- **A defect this exposed.** The first GPU run failed inside `ensure_finite` with
+  a panic, not a returned error, because it read the result back with `to_data`,
+  which panics when the device has died. That erases exactly the distinction the
+  module was written to preserve. It now uses `try_to_data`, so a device that ran
+  out of memory becomes `ModelError::CheckUnavailable` rather than a crash.
+- **Not done:** comparing selected gradients. The harness compares logits only;
+  gradients would need the same treatment applied to `Param::grad` on both
+  devices.
+- **Unsupported combinations, documented:** CUDA needs an NVIDIA card. ROCm
+  needs GCN 3rd generation or newer, so it excludes this card, and is barely
+  supported on Windows regardless. `cpu` (CubeCL LLVM JIT) works but measured
+  about three times slower than `flex` and costs nine to eighteen minutes of
+  kernel compilation. `wgpu` works and is faster, but is bounded by 4 GB here.
 
 ## L. Serving
 

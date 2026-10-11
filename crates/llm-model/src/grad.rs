@@ -39,10 +39,16 @@ pub fn ensure_finite<const D: usize>(
 ) -> Result<(), ModelError> {
     let probe = (values.clone() * 0.0).sum();
 
+    // `try_to_data`, not `to_data`. Reading a tensor back can fail for reasons
+    // that have nothing to do with the values — a device that ran out of memory
+    // while materialising the result, a backend that cannot execute the
+    // reduction — and `to_data` panics on those. The distinction this module
+    // exists to preserve is between a check that failed and a check that could
+    // not run; a panic erases it and takes the process with it.
     let total = probe
-        .to_data()
-        .try_to_vec::<f32>()
+        .try_to_data()
         .ok()
+        .and_then(|data| data.try_to_vec::<f32>().ok())
         .and_then(|values| values.first().copied())
         .ok_or(ModelError::CheckUnavailable { quantity })?;
 
