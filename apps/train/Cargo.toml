@@ -9,6 +9,11 @@ publish.workspace = true
 
 [dependencies]
 llm-core = { workspace = true }
+llm-data = { workspace = true }
+llm-model = { workspace = true }
+llm-tokenizer = { workspace = true }
+llm-training = { workspace = true }
+llm-checkpoint = { workspace = true }
 thiserror = { workspace = true }
 
 # Burn is a direct dependency of the composition root because this is where the

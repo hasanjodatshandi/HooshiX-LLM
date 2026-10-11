@@ -372,10 +372,44 @@ Notes (2026-10-10) — seven of eight items complete:
   `cargo clippy --workspace --all-targets -- -D warnings`. Every run reports zero
   non-finite losses and zero skipped steps, which is evidence of numerical
   stability.
-- **The acceptance criterion is not yet met in full.** Stability is demonstrated
-  on fixed fixtures. A Stage-1 smoke run over prepared shards, with the schedule
-  and checkpoint interval the smoke configuration specifies, comes after
-  checkpointing, and the gate should be judged there.
+- **Acceptance met (2026-10-10).** The smoke run that this criterion names now
+  exists and passes. `llm-train` was a composition root that loaded a
+  configuration and preflighted a device; it now reads a prepared dataset, builds
+  batches, trains, evaluates and checkpoints. Against
+  `tests/fixtures/smoke-pipeline.toml` — 2 layers, width 64, 320-token
+  vocabulary, 100 steps over a 41-sequence training shard — two consecutive runs
+  produce **bit-identical** results: first loss 5.7687, best 3.9223, last
+  4.1606, validation 4.3158 at step 100, four checkpoints, **zero refused steps
+  and zero abandoned steps**, exit 0.
+- Three defects were found by running the chain, none of which any unit test
+  could have caught:
+  - **The training app never seeded the device.** The configuration has a seed
+    and `init.rs` states that the composition root seeds before constructing, but
+    the composition root did not, so two runs began from different weights. The
+    first loss differed between runs and nothing else did. This is the
+    reproducibility rule of section F being enforced in the crate that owns the
+    seeding and forgotten in the crate that must call it.
+  - **The device built for training was not an autodiff device.** A step cannot
+    produce gradients on a device that is not tracking them, so the first run
+    panicked inside Burn. `build_device` now returns an autodiff device, which
+    makes it a property of construction rather than something each call site has
+    to remember.
+  - **A second run refused to start twenty-five steps in.** Checkpoint
+    publication refuses to replace an existing directory, which is correct, but
+    the refusal arrived after the run had already done work. The checkpoint root
+    is now checked before the first step.
+- `llm-data` had no shard reader. It could write and validate shards and nothing
+  could read one back, so the training path had no way to obtain a batch.
+  `ShardReader` streams sequences out, checks the header on open — magic, version,
+  sequence length, split tag, tokenizer identity — and deliberately does not
+  verify the trailing digest, which is a full pass over the payload and belongs
+  to `validate_shard` as an explicit integrity step. Ten tests cover it,
+  including the case that matters most: a shard opened with the wrong tokenizer
+  is refused rather than trained on.
+- The fixture corpus is 59 documents, and the 0.5% holdout of
+  `configs/stage1-smoke.toml` is zero documents, which leaves the validation
+  split empty and the evaluation path untested. `tests/fixtures/smoke-pipeline.toml`
+  uses a 20% holdout for this reason, and says so.
 
 ## I. Checkpointing
 

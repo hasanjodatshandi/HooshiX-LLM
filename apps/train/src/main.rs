@@ -17,7 +17,10 @@
 //! The exit code is distinct per failure class so that a supervisor or CI job
 //! can distinguish a bad configuration from a broken device.
 
+mod dataset;
 mod device;
+mod error;
+mod training;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -30,6 +33,12 @@ const EXIT_CONFIG: u8 = 2;
 const EXIT_BACKEND: u8 = 3;
 /// The device failed its preflight.
 const EXIT_DEVICE: u8 = 4;
+/// The dataset is missing, unreadable, or was prepared with another tokenizer.
+const EXIT_DATASET: u8 = 5;
+/// The run itself failed.
+const EXIT_TRAIN: u8 = 6;
+/// The tokenizer artifact could not be read.
+const EXIT_TOKENIZER: u8 = 7;
 
 fn main() -> ExitCode {
     let config = match load_config() {
@@ -52,15 +61,70 @@ fn main() -> ExitCode {
 
     let compute_device = device::build_device(config.runtime.backend);
     match device::preflight(&compute_device) {
-        Ok(()) => {
-            println!("llm-train: device preflight passed on {compiled}");
-            ExitCode::SUCCESS
-        }
+        Ok(()) => println!("llm-train: device preflight passed on {compiled}"),
         Err(error) => {
             eprintln!("llm-train: device preflight failed: {error}");
-            ExitCode::from(EXIT_DEVICE)
+            return ExitCode::from(EXIT_DEVICE);
         }
     }
+
+    let report = match training::run(&config, &compute_device) {
+        Ok(report) => report,
+        Err(error) => {
+            eprintln!("llm-train: {error}");
+            return ExitCode::from(exit_code_for(&error));
+        }
+    };
+
+    summarise(&report);
+
+    if report.is_stable() {
+        ExitCode::SUCCESS
+    } else {
+        eprintln!(
+            "llm-train: the run was not numerically stable: {} refused step(s), {} abandoned",
+            report.non_finite_losses, report.skipped_steps
+        );
+        ExitCode::from(EXIT_TRAIN)
+    }
+}
+
+/// Maps a failure to the exit code that says whose problem it is.
+fn exit_code_for(error: &error::TrainError) -> u8 {
+    match error {
+        error::TrainError::DatasetMissing { .. }
+        | error::TrainError::SplitMissing { .. }
+        | error::TrainError::TokenizerIdentityMismatch { .. }
+        | error::TrainError::EmptyShard { .. }
+        | error::TrainError::Data(_) => EXIT_DATASET,
+        error::TrainError::Config(_) | error::TrainError::TokenizerArtifactMissing => EXIT_CONFIG,
+        error::TrainError::Tokenizer(_) => EXIT_TOKENIZER,
+        _ => EXIT_TRAIN,
+    }
+}
+
+/// Prints what the run measured.
+fn summarise(report: &training::RunReport) {
+    println!("llm-train: steps          = {}", report.steps);
+    println!(
+        "llm-train: tokens seen    = {} ({} sequences per pass over the training shard, {} passes)",
+        report.tokens, report.train_sequences, report.train_passes
+    );
+    println!(
+        "llm-train: loss           = first {:.4}, best {:.4}, last {:.4}",
+        report.first_loss, report.best_loss, report.final_loss
+    );
+    for (step, loss) in &report.evaluations {
+        println!("llm-train: validation     = step {step}, loss {loss:.4}");
+    }
+    println!("llm-train: checkpoints    = {}", report.checkpoints.len());
+    for path in &report.checkpoints {
+        println!("llm-train:   {}", path.display());
+    }
+    println!(
+        "llm-train: stability      = {} refused step(s), {} abandoned",
+        report.non_finite_losses, report.skipped_steps
+    );
 }
 
 /// Resolves the configuration to run.

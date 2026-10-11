@@ -24,7 +24,7 @@
 //! the wrong tokenizer fails immediately rather than training on noise.
 
 use std::fs::File;
-use std::io::{BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -376,6 +376,379 @@ fn hex(bytes: &[u8]) -> String {
         out.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
     out
+}
+
+/// Streams sequences out of one shard file.
+///
+/// # What opening checks, and what it does not
+///
+/// The header is checked: magic, format version, sequence length, split tag and
+/// tokenizer identity. Those are cheap and they are the dangerous ones — a shard
+/// read with the wrong tokenizer trains on noise, and the header is where that
+/// is caught.
+///
+/// The trailing digest is **not** verified. That is a full pass over the payload,
+/// and a training run opens a shard once and then reads it many times over many
+/// epochs, so paying for it on every epoch is the wrong default.
+/// [`validate_shard`] performs it as an explicit integrity step.
+pub struct ShardReader {
+    path: PathBuf,
+    file: BufReader<File>,
+    split: Split,
+    sequence_length: usize,
+    sequence_count: u64,
+    read: u64,
+}
+
+impl ShardReader {
+    /// Opens a shard, checking its header against `expectation`.
+    pub fn open(
+        path: impl AsRef<Path>,
+        expectation: &ShardExpectation<'_>,
+    ) -> Result<Self, DataError> {
+        let path = path.as_ref().to_path_buf();
+        let file = File::open(&path).map_err(|source| DataError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let length = file
+            .metadata()
+            .map_err(|source| DataError::Read {
+                path: path.clone(),
+                source,
+            })?
+            .len();
+
+        if length < SHARD_HEADER_LEN + SHARD_TRAILER_LEN {
+            return Err(DataError::ShardTruncated {
+                path,
+                expected: SHARD_HEADER_LEN + SHARD_TRAILER_LEN,
+                found: length,
+            });
+        }
+
+        let mut reader = BufReader::new(file);
+        let mut header = [0_u8; SHARD_HEADER_LEN as usize];
+        reader
+            .read_exact(&mut header)
+            .map_err(|source| DataError::Read {
+                path: path.clone(),
+                source,
+            })?;
+
+        if header[..8] != SHARD_MAGIC {
+            return Err(DataError::NotAShard { path });
+        }
+
+        let format_version = u32::from_le_bytes(read_u32(&header, 8));
+        if format_version != SHARD_FORMAT_VERSION {
+            return Err(DataError::ShardVersion {
+                path,
+                found: format_version,
+                supported: SHARD_FORMAT_VERSION,
+            });
+        }
+
+        let sequence_length = u32::from_le_bytes(read_u32(&header, 12)) as usize;
+        let Some(split) = Split::from_tag(header[16]) else {
+            return Err(DataError::NotAShard { path });
+        };
+
+        let identity_bytes = &header[IDENTITY_OFFSET..IDENTITY_OFFSET + IDENTITY_LEN];
+        let tokenizer_identity = String::from_utf8_lossy(identity_bytes).into_owned();
+        if tokenizer_identity != expectation.tokenizer_identity {
+            return Err(DataError::TokenizerMismatch {
+                path,
+                expected: expectation.tokenizer_identity.to_owned(),
+                found: tokenizer_identity,
+            });
+        }
+        if sequence_length != expectation.sequence_length {
+            return Err(DataError::ShardSequenceLength {
+                path,
+                expected: expectation.sequence_length,
+                found: sequence_length,
+            });
+        }
+
+        // The payload is everything between the header and the trailing digest,
+        // so the counts follow from the file size without reading it.
+        let payload_bytes = length - SHARD_HEADER_LEN - SHARD_TRAILER_LEN;
+        if sequence_length == 0 || !payload_bytes.is_multiple_of(sequence_length as u64 * 4) {
+            return Err(DataError::ShardNotAligned {
+                path,
+                tokens: payload_bytes / 4,
+                sequence_length,
+            });
+        }
+
+        Ok(Self {
+            path,
+            file: reader,
+            split,
+            sequence_length,
+            sequence_count: payload_bytes / (sequence_length as u64 * 4),
+            read: 0,
+        })
+    }
+
+    /// Split the shard holds.
+    #[must_use]
+    pub const fn split(&self) -> Split {
+        self.split
+    }
+
+    /// Tokens per sequence.
+    #[must_use]
+    pub const fn sequence_length(&self) -> usize {
+        self.sequence_length
+    }
+
+    /// Sequences the shard holds.
+    #[must_use]
+    pub const fn sequence_count(&self) -> u64 {
+        self.sequence_count
+    }
+
+    /// Sequences handed out so far since the last rewind.
+    #[must_use]
+    pub const fn position(&self) -> u64 {
+        self.read
+    }
+
+    /// Whether every sequence has been handed out.
+    #[must_use]
+    pub const fn is_exhausted(&self) -> bool {
+        self.read >= self.sequence_count
+    }
+
+    /// Reads the next sequence, or `None` at the end of the shard.
+    pub fn next_sequence(&mut self) -> Result<Option<Vec<u32>>, DataError> {
+        if self.is_exhausted() {
+            return Ok(None);
+        }
+
+        let mut bytes = vec![0_u8; self.sequence_length * 4];
+        self.file
+            .read_exact(&mut bytes)
+            .map_err(|source| DataError::Read {
+                path: self.path.clone(),
+                source,
+            })?;
+
+        let tokens = bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|chunk| u32::from_le_bytes(*chunk))
+            .collect();
+
+        self.read += 1;
+        Ok(Some(tokens))
+    }
+
+    /// Returns to the first sequence, so the shard can be read again.
+    ///
+    /// A training run visits its shards once per epoch, so this is the normal
+    /// path rather than an optimisation.
+    pub fn rewind(&mut self) -> Result<(), DataError> {
+        use std::io::Seek;
+
+        self.file
+            .seek(std::io::SeekFrom::Start(SHARD_HEADER_LEN))
+            .map_err(|source| DataError::Read {
+                path: self.path.clone(),
+                source,
+            })?;
+        self.read = 0;
+        Ok(())
+    }
+
+    /// Collects every sequence in the shard.
+    ///
+    /// For tests and for small shards. A training run streams instead, because a
+    /// real shard does not fit in memory beside the model.
+    pub fn read_all(&mut self) -> Result<Vec<Vec<u32>>, DataError> {
+        let mut sequences = Vec::with_capacity(self.sequence_count as usize);
+        self.rewind()?;
+        while let Some(sequence) = self.next_sequence()? {
+            sequences.push(sequence);
+        }
+        Ok(sequences)
+    }
+}
+
+#[cfg(test)]
+mod reader_tests {
+    use super::{ShardExpectation, ShardReader, ShardWriter};
+    use crate::error::DataError;
+    use crate::split::Split;
+    use std::path::PathBuf;
+
+    const IDENTITY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn scratch_dir() -> PathBuf {
+        // `CARGO_TARGET_TMPDIR` is only defined for integration tests, and this
+        // is a unit test, so the path is built from the manifest directory.
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("target")
+            .join("tmp")
+            .join("llm-data-reader-tests");
+        std::fs::create_dir_all(&directory).expect("scratch directory");
+        directory
+    }
+
+    fn expectation<'a>(identity: &'a str, sequence_length: usize) -> ShardExpectation<'a> {
+        ShardExpectation {
+            tokenizer_identity: identity,
+            sequence_length,
+        }
+    }
+
+    /// Writes a shard of `sequences` and returns its path.
+    fn write_shard(name: &str, sequences: &[Vec<u32>], sequence_length: usize) -> PathBuf {
+        let path = scratch_dir().join(name);
+        let mut writer =
+            ShardWriter::create(&path, Split::Train, sequence_length, IDENTITY).expect("header");
+        for sequence in sequences {
+            writer.push_sequence(sequence).expect("sequence");
+        }
+        writer.finish().expect("completes");
+        path
+    }
+
+    fn sample() -> Vec<Vec<u32>> {
+        vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8], vec![9, 10, 11, 12]]
+    }
+
+    #[test]
+    fn a_shard_reads_back_exactly_what_was_written() {
+        let path = write_shard("round-trip.shard", &sample(), 4);
+        let mut reader =
+            ShardReader::open(&path, &expectation(IDENTITY, 4)).expect("the header checks out");
+
+        assert_eq!(reader.sequence_count(), 3);
+        assert_eq!(reader.sequence_length(), 4);
+        assert_eq!(reader.split(), Split::Train);
+        assert_eq!(reader.read_all().expect("reads"), sample());
+    }
+
+    #[test]
+    fn reading_past_the_end_reports_nothing_rather_than_failing() {
+        let path = write_shard("exhausted.shard", &sample(), 4);
+        let mut reader = ShardReader::open(&path, &expectation(IDENTITY, 4)).expect("opens");
+
+        for expected in sample() {
+            assert_eq!(reader.next_sequence().expect("reads"), Some(expected));
+        }
+        assert!(reader.is_exhausted());
+        assert_eq!(reader.next_sequence().expect("reads"), None);
+        // Asking twice must stay a no-op rather than becoming an error.
+        assert_eq!(reader.next_sequence().expect("reads"), None);
+    }
+
+    #[test]
+    fn rewinding_starts_the_shard_again() {
+        let path = write_shard("rewind.shard", &sample(), 4);
+        let mut reader = ShardReader::open(&path, &expectation(IDENTITY, 4)).expect("opens");
+
+        let _ = reader.next_sequence().expect("reads");
+        let _ = reader.next_sequence().expect("reads");
+        assert_eq!(reader.position(), 2);
+
+        reader.rewind().expect("seeks");
+        assert_eq!(reader.position(), 0);
+        assert!(!reader.is_exhausted());
+        assert_eq!(reader.read_all().expect("reads"), sample());
+    }
+
+    #[test]
+    fn an_empty_shard_reads_as_no_sequences() {
+        let path = write_shard("empty.shard", &[], 4);
+        let mut reader = ShardReader::open(&path, &expectation(IDENTITY, 4)).expect("opens");
+
+        assert_eq!(reader.sequence_count(), 0);
+        assert!(reader.is_exhausted());
+        assert_eq!(reader.read_all().expect("reads"), Vec::<Vec<u32>>::new());
+    }
+
+    #[test]
+    fn the_wrong_tokenizer_is_refused_at_open() {
+        // The whole point of storing the identity in the header: ids only mean
+        // something relative to the tokenizer that produced them.
+        let path = write_shard("wrong-tokenizer.shard", &sample(), 4);
+        let other = "f".repeat(64);
+
+        assert!(matches!(
+            ShardReader::open(&path, &expectation(&other, 4)),
+            Err(DataError::TokenizerMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn the_wrong_sequence_length_is_refused_at_open() {
+        let path = write_shard("wrong-length.shard", &sample(), 4);
+
+        assert!(matches!(
+            ShardReader::open(&path, &expectation(IDENTITY, 8)),
+            Err(DataError::ShardSequenceLength { .. })
+        ));
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_shard_is_refused() {
+        let path = scratch_dir().join("not-a-shard.bin");
+        std::fs::write(&path, vec![0_u8; 512]).expect("writes");
+
+        assert!(matches!(
+            ShardReader::open(&path, &expectation(IDENTITY, 4)),
+            Err(DataError::NotAShard { .. })
+        ));
+    }
+
+    #[test]
+    fn a_truncated_file_is_refused() {
+        let path = scratch_dir().join("short.bin");
+        std::fs::write(&path, vec![0_u8; 16]).expect("writes");
+
+        assert!(matches!(
+            ShardReader::open(&path, &expectation(IDENTITY, 4)),
+            Err(DataError::ShardTruncated { .. })
+        ));
+    }
+
+    #[test]
+    fn a_missing_file_is_reported_as_a_read_failure() {
+        let path = scratch_dir().join("does-not-exist.shard");
+
+        assert!(matches!(
+            ShardReader::open(&path, &expectation(IDENTITY, 4)),
+            Err(DataError::Read { .. })
+        ));
+    }
+
+    #[test]
+    fn a_payload_that_is_not_a_whole_number_of_sequences_is_refused() {
+        // Built by hand: a valid header and trailer with a payload that cannot
+        // be divided into sequences of the declared length.
+        let path = scratch_dir().join("misaligned.shard");
+        let mut bytes = vec![0_u8; 128];
+        bytes[..8].copy_from_slice(b"LLMSHRD1");
+        bytes[8..12].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&4_u32.to_le_bytes());
+        bytes[16] = Split::Train.tag();
+        bytes[64..128].copy_from_slice(IDENTITY.as_bytes());
+        bytes.extend_from_slice(&[0_u8; 6]); // one and a half sequences
+        bytes.extend_from_slice(&[0_u8; 32]); // trailer
+        std::fs::write(&path, bytes).expect("writes");
+
+        assert!(matches!(
+            ShardReader::open(&path, &expectation(IDENTITY, 4)),
+            Err(DataError::ShardNotAligned { .. })
+        ));
+    }
 }
 
 #[cfg(test)]

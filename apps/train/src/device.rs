@@ -53,29 +53,36 @@ pub const fn compiled_backend() -> BackendChoice {
 /// The family comes from the compiled-in feature and the index from the
 /// request. Callers must have checked the request against
 /// [`compiled_backend`] first, so the request is known to name this family.
+///
+/// # Why the device is an autodiff device
+///
+/// Every device this application builds exists to train, and a step cannot
+/// produce gradients on a device that is not tracking them: the backward pass
+/// panics on an untracked tensor rather than returning zeros. Making that a
+/// property of construction means it cannot be forgotten at one call site.
 #[must_use]
 pub fn build_device(requested: BackendChoice) -> Device {
     #[cfg(feature = "cuda")]
     {
-        Device::cuda(requested.device_index())
+        Device::cuda(requested.device_index()).autodiff()
     }
     #[cfg(feature = "wgpu")]
     {
         // WGPU picks its adapter from device settings rather than from an index.
         let _ = requested;
-        Device::wgpu(Default::default())
+        Device::wgpu(Default::default()).autodiff()
     }
     #[cfg(feature = "cpu")]
     {
         // The CubeCL CPU runtime is single-device.
         let _ = requested;
-        Device::cpu()
+        Device::cpu().autodiff()
     }
     #[cfg(feature = "flex")]
     {
         // The Flex backend is single-device.
         let _ = requested;
-        Device::flex()
+        Device::flex().autodiff()
     }
 }
 

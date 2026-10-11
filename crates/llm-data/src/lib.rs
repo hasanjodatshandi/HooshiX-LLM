@@ -39,7 +39,7 @@ pub use normalize::{InvalidUtf8Policy, normalize};
 pub use pack::{PACKING_VERSION, PackingStats, SequencePacker, TailPolicy};
 pub use pipeline::{PrepareRequest, prepare};
 pub use shard::{
-    SHARD_FORMAT_VERSION, ShardExpectation, ShardSummary, ShardWriter, validate_shard,
+    SHARD_FORMAT_VERSION, ShardExpectation, ShardReader, ShardSummary, ShardWriter, validate_shard,
 };
 pub use source::{ContentType, SourceManifest, SourceReader, SourceSpec};
 pub use split::{SPLIT_VERSION, Split, SplitPolicy};

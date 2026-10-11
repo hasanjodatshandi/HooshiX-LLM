@@ -1,0 +1,83 @@
+# End-to-end smoke configuration.
+#
+# This is the smallest configuration that exercises the whole chain — tokenizer,
+# preparation, training, evaluation and checkpointing — against the committed
+# fixture corpus. It exists so the pipeline can be run and judged without a
+# dataset, and it is not a model worth keeping: 2 layers of width 64 against a
+# 320-token vocabulary.
+#
+# The holdout is 20% rather than the 0.5% of `configs/stage1-smoke.toml`. The
+# fixture is 59 documents, and half a percent of 59 is zero, which leaves the
+# validation split empty and the evaluation path untested. A larger corpus can
+# afford the smaller number; this one cannot.
+#
+# Every model rule from docs/05_MODEL_SPEC.md section 11 still applies:
+# 64 % 4 == 0, head_dim 16 is even, and the feed-forward width exceeds the
+# hidden size.
+
+version = 2
+
+[model]
+vocab_size = 320
+hidden_size = 64
+num_layers = 2
+num_heads = 4
+num_kv_heads = 4
+ffn_intermediate_size = 256
+max_sequence_length = 256
+rope_theta = 10000.0
+rms_norm_eps = 0.00001
+tie_embeddings = true
+linear_bias = false
+
+[tokenizer]
+vocab_size = 320
+model = "bpe"
+artifact = "target/tmp/smoke-tokenizer.json"
+
+[tokenizer.special_tokens]
+bos = 0
+eos = 1
+pad = 2
+unk = 3
+
+[data]
+data_root = "target/tmp/smoke-data"
+sequence_length = 64
+micro_batch_size = 2
+shuffle_seed = 0
+validation_basis_points = 2000
+test_basis_points = 0
+split_seed = 0
+
+[training]
+max_steps = 100
+data_parallel_world_size = 1
+gradient_accumulation_steps = 1
+seed = 0
+gradient_clip_global_norm = 1.0
+checkpoint_interval_steps = 25
+evaluation_interval_steps = 10
+
+[training.optimizer]
+learning_rate = 0.003
+weight_decay = 0.1
+beta1 = 0.9
+beta2 = 0.95
+epsilon = 0.00000001
+
+[training.scheduler]
+warmup_steps = 5
+cosine_iters = 100
+
+[generation]
+max_new_tokens = 16
+seed = 0
+stop_on_eos = true
+
+[generation.strategy]
+kind = "greedy"
+
+[runtime]
+backend = "flex"
+precision = "f32"
