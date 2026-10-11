@@ -796,10 +796,40 @@ cargo test --workspace
 
 Then complete:
 
-- [ ] security/reliability review;
-- [ ] dependency audit;
-- [ ] no Python files/runtime in required workflow;
-- [ ] README commands verified from a clean checkout;
-- [ ] Stage-1 acceptance report.
+- [x] security/reliability review;
+- [x] dependency audit;
+- [x] no Python files/runtime in required workflow;
+- [x] README commands verified from a clean checkout;
+- [x] Stage-1 acceptance report.
+
+**MET (2026-10-11).** Report at `25_STAGE1_ACCEPTANCE_REPORT.md`.
+
+The report was first written as `19_STAGE1_ACCEPTANCE_REPORT.md`, which collided
+with the existing `19_RUST_CODING_STANDARDS.md`. It is `25_`, the next free
+number, and it is listed in the `00_README.md` index.
+
+- **Release gate from a clean clone** of the remote at `c6f811f`, into a fresh
+  directory: `fmt` 0, `check` 0, `clippy` 0, `test` 0 with **337 passed**, `doc` 0.
+  Zero tracked files under `target/`. This was run **twice**: the first attempt
+  assigned the clone path without a `$`, so the gates ran in the working directory
+  and the result proved nothing. The report says so.
+- **Dependency audit: no vulnerabilities.** One warning, `paste 1.0.15`
+  unmaintained (RUSTSEC-2024-0436), which reaches the graph through Burn's own
+  `burn-dispatch` and cannot be resolved from this workspace. 319 crates resolved.
+- **No Python**: no `.py`, `.pyi`, `.ipynb` or `.pyx` file in the tree, and no
+  tracked file outside `docs/` referencing a Python runtime, package manifest or
+  virtual environment.
+- **Security and reliability review** in the report's section 6, including the
+  panic audit — every `unwrap`/`expect`/`panic!` in the workspace is inside a test
+  module, a `tests/` file or an `examples/` file, and no `unsafe` block exists.
+- The report's section 9 lists what is **not** true, including the withdrawn
+  speedup claim, the unbuilt `cuda` backend, the variance in checkpoint write
+  throughput, and the fact that the model is not fast: about 136 days for the
+  configured Stage-1 run.
+
+**Two items remain open inside Stage 1** and the report says Stage 2 should not
+begin until they are closed or explicitly deferred by an ADR: **BF16** (section F,
+optional) and the checkpoint suite's **`content_sha256` tree check**, which has
+never executed because the bundler's sentinel short-circuits it.
 
 Only then begin Stage 2.

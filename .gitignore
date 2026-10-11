@@ -16,3 +16,12 @@
 *.bpk
 *.safetensors
 *.mpk
+
+# A clone nested inside the working tree.
+#
+# This is not a category of file, it is a mistake that happened: a script
+# assigned a clone path without a `$`, so `git clone` fell back to a directory
+# named after the repository and an entire second checkout appeared at the root.
+# It was nearly committed. The guard is here because the next such typo should
+# cost a confusing directory rather than a repository inside a repository.
+/HooshiX-LLM/

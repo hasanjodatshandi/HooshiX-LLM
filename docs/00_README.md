@@ -81,6 +81,7 @@ The stage count is fixed. Internal tasks inside a stage are not additional stage
 | `22_RUST_API_OBSERVABILITY_SECURITY_STANDARDS.md` | Axum boundary, tracing and security rules |
 | `23_RUST_TESTING_QUALITY_DELIVERY_STANDARDS.md` | Testing, Clippy, Git and AI delivery rules |
 | `24_JAVA_TO_RUST_STANDARDS_MAPPING.md` | Explicit mapping/omissions from Java/Spring standards |
+| `25_STAGE1_ACCEPTANCE_REPORT.md` | What Stage 1 delivered, what was measured, and what is not true |
 | `AGENTS.md` | Mandatory coding-agent entry point |
 
 ## Start here
