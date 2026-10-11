@@ -361,41 +361,63 @@ it is labelled where it comes from.
 
 | figure | value |
 |---|---|
-| cold start | 0.886 s |
-| prefill | 675.4 tokens/s (128 tokens in 0.190 s) |
-| TTFT | 0.190 s |
-| decode | 28.0 tokens/s (0.0358 s/token mean, 0.0388 s worst) |
-| training | **71.0 tokens/s — see the note below** |
-| peak memory | 9681.3 MiB |
-| checkpoint write | 292.9 MiB/s (1321484027 bytes in 4.303 s) |
-| checkpoint read | 1367.1 MiB/s (1321484027 bytes in 0.922 s) |
+| cold start | 0.888 s |
+| prefill | 716.6 tokens/s (128 tokens in 0.179 s) |
+| TTFT | 0.179 s |
+| decode | 31.3 tokens/s (0.0319 s/token mean, 0.0335 s worst) |
+| training | 210.9 tokens/s over 5 steps |
+| peak memory | 9681.4 MiB |
+| checkpoint write | 72.7 MiB/s (1321484283 bytes in 17.344 s) |
+| checkpoint read | 1432.2 MiB/s (1321484283 bytes in 0.880 s) |
 
-### The training figure is not trusted, and is published as untrusted
+### A first attempt reported 71 tokens/s, and the measurement was at fault
 
-71 tokens/s is far below the 235 tokens/s that `throughput` measured for the same
-shape, and the difference is not explained. The two differ in ways that could
-account for some of it — `bench` runs two timed steps against `throughput`'s
-three, rebuilds its batches every step rather than reusing them, and holds a
-checkpoint in memory afterwards — but none of those obviously accounts for a
-factor of three, and a guess is not an explanation.
+The first run of this benchmark printed **71 tokens/s** for a shape that
+`throughput` measures at 195–235. It was published as untrusted rather than
+buried, and the reconciliation is worth recording because the cause was the
+measurement, not the code:
 
-The number is printed rather than omitted because a baseline that hides a figure
-it dislikes is not a baseline. It is marked untrusted because publishing it as a
-measurement would be worse. The next step for this section is to reconcile the
-two, and the likely cause is that the process peaked at 9.7 GiB and the machine
-was under memory pressure while training was timed.
+**The default was two timed steps, and the first one carries a one-time cost.**
+AdamW's moment buffers are allocated on first use — 880 MB for the Stage-1 model
+— and a second allocation cost appears on the first step after warmup. At two
+steps that fixed cost was half the average. Measured back to back at the same
+shape:
+
+| run | tokens/s |
+|---|---|
+| `throughput`, 8 × 512, 5 timed steps | 195 |
+| `bench`, 8 × 512, 5 timed steps, minimal prompt | 192.3 |
+| `bench`, 8 × 512, 5 timed steps, real prompt | 199.3 |
+| `bench`, 8 × 512, **2 timed steps** | **71** |
+
+Generation before training makes no difference — rows two and three agree — so
+the only variable was the step count. The default is now five timed steps over
+two warmup steps, and the flag carries the reason.
+
+This is section 1's rule applied to the benchmark itself: a figure taken over too
+few steps measures the allocator, not the model, and it is not a measurement
+until it can be reproduced by the thing it claims to measure.
+
+### Checkpoint writing varies by more than 4× between runs
+
+The same write took 4.303 s in one run and 17.344 s in another — 292.9 against
+72.7 MiB/s — on the same bytes. Reading did not move (1367 against 1432 MiB/s).
+Writing is the operation that touches the filesystem, and this machine carries
+about 30% background load, which section 12 already records as the reason
+cross-run comparisons are invalid here. The reading figure is usable; the writing
+figure needs either a quiet machine or several repetitions, and until then it
+should be quoted as a range rather than a number.
 
 ### What the numbers say
 
-Prefill and decode differ by a factor of 24, which is the shape of the problem
+Prefill and decode differ by a factor of 23, which is the shape of the problem
 rather than a surprise: prefill processes 128 tokens in one parallel pass, and
 decode processes one token at a time with a full weight read per token. It is
 also why TTFT is dominated by prefill and why a long generation is dominated by
 decode, and why one "tokens/s" figure for inference would have hidden both.
 
-Checkpoint reading is 4.7× writing, which is what the format predicts: writing
-publishes atomically through a temporary directory and a rename, and reading takes
-the file as it lies.
+Checkpoint reading is about 20× writing in this run, though that gap is mostly
+the write variance above rather than a property of the format.
 
 ### Not measured
 
@@ -403,8 +425,10 @@ the file as it lies.
   on this machine: the attention score tensor is 1.6 GB and the allocation fails.
   The shape is a parameter of the benchmark for exactly this reason.
 - `prefill` is reported as TTFT rather than as a separate forward pass. They
-  differ by one sampling step, which is microseconds against 190 ms, but the
+  differ by one sampling step, which is microseconds against 179 ms, but the
   report should say that rather than let a reader assume two measurements were
   taken.
 - No accelerator figures. `throughput` measured the GPU at 514 tokens/s at
   `2 × 256`; `bench` was not built for `wgpu` in this pass.
+- Binary size is for `bench.exe` alone, at 11.83 MiB in release. The other
+  binaries were not measured.

@@ -766,11 +766,20 @@ target/release/bench --config configs/stage1-110m.toml --micro-batch 8 --sequenc
 - **The shape is a parameter**, because the configured Stage-1 shape cannot be
   measured here: `batch 8 × sequence 2048` allocates a 1.6 GB attention score
   tensor and fails. A baseline that cannot be taken is not a baseline.
-- **The training figure is published as untrusted.** 71 tokens/s disagrees with
-  the 235 tokens/s that `throughput` measured for the same shape, and the
-  difference is not explained. Printing it rather than hiding it keeps the
-  baseline honest; marking it untrusted keeps it from being cited. Reconciling
-  the two is the remaining work in this section.
+- **The training figure was wrong, and the measurement was at fault.** The first
+  run reported 71 tokens/s for a shape `throughput` measures at 195–235. It was
+  published as untrusted rather than buried, and the cause was found: the default
+  was two timed steps, and the first step after warmup carries a one-time
+  allocation — AdamW's moment buffers, 880 MB for Stage-1 — which at two steps was
+  half the average. At five timed steps `bench` reports **192.3** against
+  `throughput`'s **195** for the same shape, and generation before training makes
+  no difference. The default is now five timed steps over two warmup steps, and
+  the accepted figure is **210.9 tokens/s**.
+- **Checkpoint writing varies by more than 4×** between runs — 292.9 against
+  72.7 MiB/s on the same bytes — while reading does not move. That is the
+  machine's background load, which `11_BENCHMARKING.md` section 12 already records
+  as the reason cross-run comparisons are invalid here. The write figure should be
+  quoted as a range until it is taken on a quiet machine or repeated.
 - **Prefill and decode are separated**, as `09_INFERENCE_AND_SERVING.md` section 1
   requires and as section 4 of this checklist asks: 675.4 against 28.0 tokens/s.
   One inference figure would have hidden a factor of 24.

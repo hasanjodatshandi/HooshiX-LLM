@@ -65,12 +65,19 @@ struct Arguments {
     decode_tokens: usize,
 
     /// Optimizer steps to time for the training figure.
-    #[arg(long, default_value_t = 3)]
+    ///
+    /// Five rather than two, and the difference is not cosmetic. The first step
+    /// after a warmup still carries a one-time cost — AdamW's moment buffers are
+    /// allocated on first use, which is 880 MB for the Stage-1 model — and at two
+    /// steps that cost was half the measurement. It reported 71 tokens/s for a
+    /// shape that measures 195. A throughput figure taken over too few steps
+    /// measures the allocator, not the model.
+    #[arg(long, default_value_t = 5)]
     training_steps: usize,
 
     /// Steps run before timing, so the measurement is not dominated by the first
     /// allocation.
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 2)]
     warmup_steps: usize,
 
     /// Micro-batch to measure instead of the configuration's.
