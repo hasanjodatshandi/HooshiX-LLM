@@ -562,12 +562,12 @@ Notes (2026-10-10) — all ten items complete:
 - [x] Run reference model on CPU.
 - [x] Run same weights/input on target GPU.
 - [x] Compare logits/loss within dtype tolerance.
-- [ ] Compare selected gradients.
+- [x] Compare selected gradients.
 - [x] Document unsupported backend/dtype combinations.
 
 **Acceptance:** parity report committed/generated.
 
-**PARTIALLY MET (2026-10-11).** Four of five items. This section was expected to
+**MET (2026-10-11).** Five of five items. This section was expected to
 be unrunnable because the machine has no NVIDIA card and CUDA is NVIDIA-only.
 That expectation was wrong, and the correction is the main result here.
 
@@ -619,9 +619,49 @@ That expectation was wrong, and the correction is the main result here.
   which panics when the device has died. That erases exactly the distinction the
   module was written to preserve. It now uses `try_to_data`, so a device that ran
   out of memory becomes `ModelError::CheckUnavailable` rather than a crash.
-- **Not done:** comparing selected gradients. The harness compares logits only;
-  gradients would need the same treatment applied to `Param::grad` on both
-  devices.
+- **Gradient parity (2026-10-11).** The harness now runs the objective on both
+  devices and collects every parameter's gradient through a `ModuleVisitor`, in
+  the module's own field order, so the two sequences are comparable element by
+  element:
+  ```text
+  logits     elements  10240, worst absolute 4.4703484e-7, non-finite 0
+  gradients  elements 151872, worst absolute 2.3841858e-7, non-finite 0
+  parameters without a gradient: reference 0, accelerated 0
+  ```
+  All 151872 gradient elements — every parameter in the model — agree to 2.4e-7,
+  which is f32 rounding. Logits agreeing proves nothing about the backward pass:
+  a wrong derivative or a detached path leaves the forward output untouched and
+  moves every parameter the wrong way. This is the check that covers it.
+- **Tuning the 4 GB card (2026-10-11).** The card no longer drives the display,
+  which returned about 900 MB: dedicated usage fell from 945 MB to 64 MB. What
+  that changed, measured with `throughput`:
+
+  | shape | tokens per step | result |
+  |---|---|---|
+  | 2 × 256 | 512 | **514 tok/s** |
+  | 1 × 512 | 512 | 383 tok/s |
+  | 4 × 256, 2 × 512, 1 × 1024 | 1024 | out of memory |
+  | 8 × 256, 4 × 512, 8 × 512 | 2048 or more | out of memory |
+
+  The ceiling is **512 tokens per micro-batch, whatever the shape**. Freeing the
+  display's memory did not raise it — it moved the first row of the second group,
+  and before the card was freed even `1 × 512` failed. The binding term is the
+  logits tensor at `tokens × vocab_size × 4`: 67 MB per copy at 512 tokens
+  against 134 MB at 1024, multiplied by the copies `log_softmax` and its backward
+  need, on top of about 1.76 GB of weights, gradients and AdamW moments that do
+  not move.
+- **Gradient accumulation is not free here**, unlike on the CPU where it was
+  measured at no per-token cost. `ACCUM` in `throughput` holds the total fixed
+  and shrinks the micro-batch, and shrinking it costs: 2 × 256 gives 514 tok/s
+  while 1 × 256 gives 261. The card needs a real micro-batch to be efficient, so
+  accumulation buys memory rather than throughput, and here it spends throughput
+  to get it.
+- **The configured Stage-1 shape cannot run on this GPU at all.** `batch 8 ×
+  sequence 2048` is 16384 tokens per step against a ceiling of 512. Sequence 2048
+  is not reachable at any batch size — `1 × 1024` is already out of memory — so
+  the sequence length is the wall rather than the batch. This is a memory limit
+  of the card, not a defect: the same configuration runs on the reference path,
+  slowly.
 - **Unsupported combinations, documented:** CUDA needs an NVIDIA card. ROCm
   needs GCN 3rd generation or newer, so it excludes this card, and is barely
   supported on Windows regardless. `cpu` (CubeCL LLVM JIT) works but measured

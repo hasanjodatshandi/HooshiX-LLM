@@ -1,4 +1,4 @@
-//! Compares a backend against the reference path.
+//! Compares a backend against the reference path: logits and gradients.
 //!
 //! Run with both features enabled, so one process holds two devices:
 //!
@@ -13,16 +13,24 @@
 //! draw different numbers. Comparing two runs that each trained from their own
 //! seed would therefore measure the seeds, not the backends.
 //!
-//! The shared weights are therefore written once by the reference path and read
-//! back by both. After that, any difference in the output is a difference in
-//! arithmetic.
+//! The shared weights are written once by the reference path and read back by
+//! both. After that, any difference in the output is a difference in arithmetic.
+//!
+//! # Why gradients as well as logits
+//!
+//! Logits that agree prove the forward pass agrees. They say nothing about the
+//! backward pass, and a training run's correctness lives in the backward pass:
+//! a wrong derivative, a mis-transposed weight or a detached path leaves the
+//! forward output untouched and moves every parameter in the wrong direction.
+//! So the same batch is pushed through the same objective on both devices and the
+//! gradients are compared element by element.
 //!
 //! # What is compared, and how closely
 //!
-//! Logits over the same tokens, element by element, reporting the largest
-//! absolute and relative difference. A dtype tolerance belongs to the caller:
-//! this prints the numbers and the verdict is a threshold the specification sets,
-//! not a constant hidden in a benchmark.
+//! The largest absolute and relative difference, printed rather than asserted
+//! against a hidden constant. A dtype tolerance belongs to the specification;
+//! this reports the numbers and fails only on a non-finite value or a shape
+//! mismatch, which are not tolerance questions.
 
 // An example aborts on failure rather than returning an error: there is no
 // caller to hand a failure to. `clippy.toml` relaxes the panic family for tests
@@ -31,13 +39,15 @@
 
 // Only the wgpu build uses these; the stub below uses none of them.
 #[cfg(feature = "wgpu")]
-use burn::module::Module;
+use burn::module::{Module, ModuleVisitor, Param};
 #[cfg(feature = "wgpu")]
-use burn::tensor::{Device, Int, Tensor, TensorData};
+use burn::tensor::{Bool, Device, Gradients, Int, Tensor, TensorData};
 #[cfg(feature = "wgpu")]
 use llm_core::{ExperimentConfig, ModelConfig};
 #[cfg(feature = "wgpu")]
-use llm_model::Transformer;
+use llm_model::{Transformer, all_positions, causal_lm_loss};
+#[cfg(feature = "wgpu")]
+use llm_training::TokenBatch;
 
 /// The comparison, available only when an accelerator backend is compiled in.
 ///
@@ -53,6 +63,135 @@ fn main() {
     );
 }
 
+/// How far apart two runs of the same computation are.
+#[cfg(feature = "wgpu")]
+struct Difference {
+    elements: usize,
+    worst_absolute: f32,
+    worst_relative: f32,
+    non_finite: usize,
+}
+
+#[cfg(feature = "wgpu")]
+impl Difference {
+    fn measure(left: &[f32], right: &[f32]) -> Self {
+        assert_eq!(
+            left.len(),
+            right.len(),
+            "the two devices produced different numbers of elements: {} against {}",
+            left.len(),
+            right.len()
+        );
+
+        let mut worst_absolute = 0.0_f32;
+        let mut worst_relative = 0.0_f32;
+        let mut non_finite = 0_usize;
+
+        for (a, b) in left.iter().zip(right.iter()) {
+            if !a.is_finite() || !b.is_finite() {
+                non_finite += 1;
+                continue;
+            }
+            let absolute = (a - b).abs();
+            worst_absolute = worst_absolute.max(absolute);
+            let scale = a.abs().max(b.abs()).max(1e-6);
+            worst_relative = worst_relative.max(absolute / scale);
+        }
+
+        Self {
+            elements: left.len(),
+            worst_absolute,
+            worst_relative,
+            non_finite,
+        }
+    }
+
+    fn report(&self, what: &str) -> bool {
+        println!(
+            "{what:<16} elements {}, worst absolute {:e}, worst relative {:e}, non-finite {}",
+            self.elements, self.worst_absolute, self.worst_relative, self.non_finite
+        );
+        self.non_finite == 0
+    }
+}
+
+/// Collects every parameter's gradient, in the module's own field order.
+///
+/// The visit is generic over the tensor rank, which is what makes it possible
+/// without naming the model's shapes here. Gradient absence is counted rather
+/// than ignored: a parameter that receives a gradient on one device and not the
+/// other is a difference the caller has to see.
+#[cfg(feature = "wgpu")]
+struct CollectGradients<'a> {
+    gradients: &'a Gradients,
+    collected: &'a mut Vec<f32>,
+    unavailable: &'a mut usize,
+}
+
+#[cfg(feature = "wgpu")]
+impl ModuleVisitor for CollectGradients<'_> {
+    fn visit_float<const D: usize>(&mut self, parameter: &Param<Tensor<D>>) {
+        // No gradient, or one that cannot be read back, is counted rather than
+        // skipped silently. A parameter that carries a gradient on one device
+        // and not the other is exactly the difference a parity check exists to
+        // find, and it would be invisible if this returned quietly.
+        let Some(gradient) = parameter.grad(self.gradients) else {
+            *self.unavailable += 1;
+            return;
+        };
+        let Ok(data) = gradient.try_to_data() else {
+            *self.unavailable += 1;
+            return;
+        };
+        let Ok(values) = data.try_to_vec::<f32>() else {
+            *self.unavailable += 1;
+            return;
+        };
+        self.collected.extend(values);
+    }
+}
+
+/// A fixed batch, built identically on whichever device is passed.
+#[cfg(feature = "wgpu")]
+fn batch(vocab_size: usize, sequence: usize, device: &Device) -> TokenBatch {
+    let ids: Vec<i32> = (0..(sequence + 1))
+        .map(|index| (index % vocab_size) as i32)
+        .collect();
+
+    // Input and target are the same ids shifted by one, which is what the
+    // objective expects and is the only place the two differ.
+    let input_ids = ids[..sequence].to_vec();
+    let target_ids = ids[1..].to_vec();
+
+    TokenBatch {
+        input: Tensor::<2, Int>::from_data(TensorData::new(input_ids, [1, sequence]), device),
+        target: Tensor::<2, Int>::from_data(TensorData::new(target_ids, [1, sequence]), device),
+        mask: all_positions(1, sequence, device) as Tensor<2, Bool>,
+    }
+}
+
+/// Runs the objective and collects every gradient it produces.
+#[cfg(feature = "wgpu")]
+fn gradients_of(model: &Transformer, batch: &TokenBatch) -> (Vec<f32>, usize) {
+    let logits = model
+        .forward(batch.input.clone(), 0)
+        .expect("the forward pass runs");
+    let loss = causal_lm_loss(logits, batch.target.clone(), batch.mask.clone())
+        .expect("the objective evaluates");
+    let gradients = loss.backward();
+
+    let mut collected = Vec::new();
+    let mut unavailable = 0_usize;
+    let mut visitor = CollectGradients {
+        gradients: &gradients,
+        collected: &mut collected,
+        unavailable: &mut unavailable,
+    };
+    model.visit(&mut visitor);
+
+    (collected, unavailable)
+}
+
 #[cfg(feature = "wgpu")]
 fn main() {
     let config_path =
@@ -60,13 +199,15 @@ fn main() {
     let config = ExperimentConfig::load(&config_path).expect("the configuration loads");
     let model_config: ModelConfig = config.model;
 
-    let reference = Device::flex();
-    let accelerated = Device::wgpu(Default::default());
+    // Autodiff on both, because the gradient comparison needs a graph.
+    let reference = Device::flex().autodiff();
+    let accelerated = Device::wgpu(Default::default()).autodiff();
 
     // The reference path writes the weights both devices will read.
     let weights = std::env::temp_dir().join("llm-parity-weights.bpk");
-    llm_model::init::seed(&reference, 0xC0FFEE);
-    let built = Transformer::new(&model_config, &reference).expect("valid configuration");
+    let seed_device = Device::flex();
+    llm_model::init::seed(&seed_device, 0xC0FFEE);
+    let built = Transformer::new(&model_config, &seed_device).expect("valid configuration");
     built
         .clone()
         .save_file(&weights)
@@ -83,58 +224,60 @@ fn main() {
         .try_load_file(&weights)
         .unwrap_or_else(|error| panic!("the accelerated device cannot read the weights: {error}"));
 
-    // A fixed, in-range input so both devices compute the same thing.
     let sequence = 32_usize;
-    let ids: Vec<i32> = (0..sequence)
-        .map(|index| (index % model_config.vocab_size) as i32)
-        .collect();
-    let tokens = |device: &Device| {
-        Tensor::<2, Int>::from_data(TensorData::new(ids.clone(), [1, sequence]), device)
-    };
+    println!("model      = {config_path}");
+    println!("tokens     = {sequence}");
+    println!(
+        "parameters = {}",
+        model_config.parameter_count().expect("fits in u64")
+    );
+    println!();
+
+    // --- logits ------------------------------------------------------------
+    let reference_batch = batch(model_config.vocab_size, sequence, &reference);
+    let accelerated_batch = batch(model_config.vocab_size, sequence, &accelerated);
 
     let reference_logits = on_reference
-        .forward(tokens(&reference), 0)
+        .forward(reference_batch.input.clone(), 0)
         .expect("the reference path runs")
-        .to_data()
+        .try_to_data()
+        .expect("the reference result is readable")
         .try_to_vec::<f32>()
         .expect("f32");
     let accelerated_logits = on_accelerated
-        .forward(tokens(&accelerated), 0)
+        .forward(accelerated_batch.input.clone(), 0)
         .expect("the accelerated path runs")
-        .to_data()
+        .try_to_data()
+        .expect("the accelerated result is readable")
         .try_to_vec::<f32>()
         .expect("f32");
 
-    assert_eq!(
-        reference_logits.len(),
-        accelerated_logits.len(),
-        "the two devices produced different shapes"
+    let logits = Difference::measure(&reference_logits, &accelerated_logits);
+    let logits_ok = logits.report("logits");
+
+    // --- gradients ---------------------------------------------------------
+    let (reference_gradients, reference_missing) = gradients_of(&on_reference, &reference_batch);
+    let (accelerated_gradients, accelerated_missing) =
+        gradients_of(&on_accelerated, &accelerated_batch);
+
+    let gradients = Difference::measure(&reference_gradients, &accelerated_gradients);
+    let gradients_ok = gradients.report("gradients");
+
+    println!();
+    println!(
+        "parameters without a gradient: reference {reference_missing}, accelerated {accelerated_missing}"
     );
 
-    let mut worst_absolute = 0.0_f32;
-    let mut worst_relative = 0.0_f32;
-    let mut non_finite = 0_usize;
-    for (left, right) in reference_logits.iter().zip(accelerated_logits.iter()) {
-        if !left.is_finite() || !right.is_finite() {
-            non_finite += 1;
-            continue;
-        }
-        let absolute = (left - right).abs();
-        worst_absolute = worst_absolute.max(absolute);
-        let scale = left.abs().max(right.abs()).max(1e-6);
-        worst_relative = worst_relative.max(absolute / scale);
-    }
-
-    println!("model            = {config_path}");
-    println!("tokens           = {sequence}");
-    println!("elements         = {}", reference_logits.len());
-    println!("worst absolute   = {worst_absolute:e}");
-    println!("worst relative   = {worst_relative:e}");
-    println!("non-finite pairs = {non_finite}");
-
-    if non_finite > 0 {
-        eprintln!("parity: FAILED — one of the backends produced a non-finite value");
+    if !logits_ok || !gradients_ok {
+        eprintln!("parity: FAILED — a non-finite value appeared on one of the backends");
         std::process::exit(1);
     }
-    println!("parity: both backends produced finite values for the same weights and input");
+    if reference_missing != accelerated_missing {
+        eprintln!(
+            "parity: FAILED — the two devices registered a different number of \
+             gradient-bearing parameters"
+        );
+        std::process::exit(1);
+    }
+    println!("parity: both backends agree on the forward pass and on the backward pass");
 }
