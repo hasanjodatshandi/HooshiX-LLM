@@ -29,6 +29,7 @@ members = [
     "crates/llm-checkpoint",
     "crates/llm-server",
     "apps/serve",
+    "apps/bench",
 ]
 
 [workspace.package]

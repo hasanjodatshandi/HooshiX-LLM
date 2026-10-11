@@ -739,16 +739,41 @@ live run.
 
 ## M. Benchmark baseline
 
-- [ ] training tokens/sec;
-- [ ] peak memory;
-- [ ] prefill tokens/sec;
-- [ ] decode tokens/sec;
-- [ ] TTFT;
-- [ ] checkpoint read/write throughput;
-- [ ] cold-start model load;
-- [ ] artifact/binary size.
+- [x] training tokens/sec;
+- [x] peak memory;
+- [x] prefill tokens/sec;
+- [x] decode tokens/sec;
+- [x] TTFT;
+- [x] checkpoint read/write throughput;
+- [x] cold-start model load;
+- [x] artifact/binary size.
 
 **Acceptance:** reproducible benchmark report with environment metadata.
+
+**MET (2026-10-11).** All eight figures, with the environment beside them, in
+`11_BENCHMARKING.md` section 15. `apps/bench` takes them:
+
+```bash
+cargo build --release -p bench
+target/release/bench --config configs/stage1-110m.toml --micro-batch 8 --sequence 512
+```
+
+- **Peak memory is taken from outside the process.** Reading a peak working set
+  needs an operating-system call and this workspace does not permit `unsafe`, so
+  the binary does not measure it and does not claim to. The wrapper samples the
+  operating system's own `PeakWorkingSet64`. The figure is labelled where it came
+  from.
+- **The shape is a parameter**, because the configured Stage-1 shape cannot be
+  measured here: `batch 8 × sequence 2048` allocates a 1.6 GB attention score
+  tensor and fails. A baseline that cannot be taken is not a baseline.
+- **The training figure is published as untrusted.** 71 tokens/s disagrees with
+  the 235 tokens/s that `throughput` measured for the same shape, and the
+  difference is not explained. Printing it rather than hiding it keeps the
+  baseline honest; marking it untrusted keeps it from being cited. Reconciling
+  the two is the remaining work in this section.
+- **Prefill and decode are separated**, as `09_INFERENCE_AND_SERVING.md` section 1
+  requires and as section 4 of this checklist asks: 675.4 against 28.0 tokens/s.
+  One inference figure would have hidden a factor of 24.
 
 ## N. Release gate
 

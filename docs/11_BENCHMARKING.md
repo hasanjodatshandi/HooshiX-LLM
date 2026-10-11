@@ -326,6 +326,85 @@ That is the substantive result of this session, and it is a **correctness** resu
 rather than a speed one. No optimization tried here made the model faster; see
 section 12. The remaining gap is that a 110M model at sequence 2048 spends
 roughly 40% of its step on the quadratic term in attention, and that the step
-runs at a small fraction of what the machine can do in principle. Closing either
+runs at a small percentage of what the machine can do in principle. Closing either
 needs a real GEMM — a BLAS, or attention built on one — and neither was reached
 here.
+
+## 15. The Stage-1 baseline report
+
+Checklist section M asks for eight figures and the environment beside them.
+`apps/bench` takes all of them. Build and run:
+
+```bash
+cargo build --release -p bench
+target/release/bench --config configs/stage1-110m.toml --micro-batch 8 --sequence 512
+```
+
+Peak memory is not taken by the binary. Reading a process's peak working set
+needs an operating-system call, and this workspace does not permit `unsafe`; the
+figure below is the operating system's own `PeakWorkingSet64`, sampled from
+outside the process. Reporting it as if the binary measured it would be a lie, so
+it is labelled where it comes from.
+
+### Environment
+
+| | |
+|---|---|
+| operating system / architecture | windows / x86_64 |
+| logical CPUs | 20 |
+| backend, compiled and configured | `flex`, f32 |
+| model | 12 layers, hidden 768, 12 heads, vocab 32768, 110119680 parameters |
+| measured shape | micro-batch 8 × sequence 512, accumulation 1 |
+| `bench.exe` | 14.73 MiB (release) |
+
+### Measurements
+
+| figure | value |
+|---|---|
+| cold start | 0.886 s |
+| prefill | 675.4 tokens/s (128 tokens in 0.190 s) |
+| TTFT | 0.190 s |
+| decode | 28.0 tokens/s (0.0358 s/token mean, 0.0388 s worst) |
+| training | **71.0 tokens/s — see the note below** |
+| peak memory | 9681.3 MiB |
+| checkpoint write | 292.9 MiB/s (1321484027 bytes in 4.303 s) |
+| checkpoint read | 1367.1 MiB/s (1321484027 bytes in 0.922 s) |
+
+### The training figure is not trusted, and is published as untrusted
+
+71 tokens/s is far below the 235 tokens/s that `throughput` measured for the same
+shape, and the difference is not explained. The two differ in ways that could
+account for some of it — `bench` runs two timed steps against `throughput`'s
+three, rebuilds its batches every step rather than reusing them, and holds a
+checkpoint in memory afterwards — but none of those obviously accounts for a
+factor of three, and a guess is not an explanation.
+
+The number is printed rather than omitted because a baseline that hides a figure
+it dislikes is not a baseline. It is marked untrusted because publishing it as a
+measurement would be worse. The next step for this section is to reconcile the
+two, and the likely cause is that the process peaked at 9.7 GiB and the machine
+was under memory pressure while training was timed.
+
+### What the numbers say
+
+Prefill and decode differ by a factor of 24, which is the shape of the problem
+rather than a surprise: prefill processes 128 tokens in one parallel pass, and
+decode processes one token at a time with a full weight read per token. It is
+also why TTFT is dominated by prefill and why a long generation is dominated by
+decode, and why one "tokens/s" figure for inference would have hidden both.
+
+Checkpoint reading is 4.7× writing, which is what the format predicts: writing
+publishes atomically through a temporary directory and a rename, and reading takes
+the file as it lies.
+
+### Not measured
+
+- The configured Stage-1 shape, `batch 8 × sequence 2048`. It cannot be measured
+  on this machine: the attention score tensor is 1.6 GB and the allocation fails.
+  The shape is a parameter of the benchmark for exactly this reason.
+- `prefill` is reported as TTFT rather than as a separate forward pass. They
+  differ by one sampling step, which is microseconds against 190 ms, but the
+  report should say that rather than let a reader assume two measurements were
+  taken.
+- No accelerator figures. `throughput` measured the GPU at 514 tokens/s at
+  `2 × 256`; `bench` was not built for `wgpu` in this pass.
