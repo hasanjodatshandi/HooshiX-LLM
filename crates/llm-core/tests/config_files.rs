@@ -55,8 +55,37 @@ fn stage1_smoke_loads_and_validates() {
 }
 
 #[test]
+fn tinystories_small_loads_and_validates() {
+    let config = ExperimentConfig::load(config_path("tinystories-small.toml"))
+        .expect("configs/tinystories-small.toml must load and validate");
+
+    assert_eq!(config.model.num_layers, 6);
+    assert_eq!(config.model.head_dim(), Some(64));
+    // The vocabulary is sized for the corpus rather than for Stage 1: TinyStories
+    // draws on a deliberately small word list, so a 32768-token vocabulary would
+    // be mostly unused rows in the embedding and in every logits tensor.
+    assert_eq!(config.model.vocab_size, 8192);
+    assert_eq!(config.tokenizer.vocab_size, 8192);
+    // A vocabulary mismatch between the two is a shape error at the first batch.
+    assert_eq!(config.model.vocab_size, config.tokenizer.vocab_size);
+
+    let parameters = config
+        .model
+        .parameter_count()
+        .expect("parameter count must fit in u64");
+    assert!(
+        (10_000_000..=50_000_000).contains(&parameters),
+        "the TinyStories model is deliberately small, got {parameters}"
+    );
+}
+
+#[test]
 fn shipped_configs_round_trip_through_toml() {
-    for name in ["stage1-110m.toml", "stage1-smoke.toml"] {
+    for name in [
+        "stage1-110m.toml",
+        "stage1-smoke.toml",
+        "tinystories-small.toml",
+    ] {
         let config = ExperimentConfig::load(config_path(name)).expect("loads");
         let text = config.to_toml_string().expect("serializes");
         let parsed = ExperimentConfig::from_toml_str(&text).expect("re-parses");

@@ -1,0 +1,80 @@
+# Training on TinyStories.
+#
+# Sized for the corpus rather than for the Stage-1 target. TinyStories is about
+# 500M tokens of deliberately simple English, and the paper that introduced it
+# worked in the 1M-35M parameter range. A 110M model on this data would be
+# over-parameterised for it, and on this machine a single epoch of the full
+# architecture is a multi-week run — so the model that can actually be trained to
+# a visible result is the small one, and `configs/stage1-110m.toml` remains the
+# Stage-1 target for a corpus and a machine that can carry it.
+#
+# The vocabulary is 8192 rather than the Stage-1 32768: TinyStories draws on a
+# deliberately small word list, so a large vocabulary would be mostly unused
+# rows in the embedding and in every logits tensor.
+
+version = 2
+
+[model]
+vocab_size = 8192
+hidden_size = 512
+num_layers = 6
+num_heads = 8
+num_kv_heads = 8
+ffn_intermediate_size = 1536
+max_sequence_length = 512
+rope_theta = 10000.0
+rms_norm_eps = 0.00001
+tie_embeddings = true
+linear_bias = false
+
+[tokenizer]
+vocab_size = 8192
+model = "bpe"
+artifact = "artifacts/tokenizer-tinystories.json"
+
+[tokenizer.special_tokens]
+bos = 0
+eos = 1
+pad = 2
+unk = 3
+
+[data]
+data_root = "artifacts/tinystories-data"
+sequence_length = 512
+micro_batch_size = 8
+shuffle_seed = 0
+validation_basis_points = 100
+test_basis_points = 100
+split_seed = 0
+
+[training]
+max_steps = 20000
+data_parallel_world_size = 1
+gradient_accumulation_steps = 1
+seed = 0
+gradient_clip_global_norm = 1.0
+checkpoint_interval_steps = 2000
+evaluation_interval_steps = 500
+
+[training.optimizer]
+learning_rate = 0.0006
+weight_decay = 0.1
+beta1 = 0.9
+beta2 = 0.95
+epsilon = 0.00000001
+
+[training.scheduler]
+warmup_steps = 500
+cosine_iters = 20000
+
+[generation]
+max_new_tokens = 128
+seed = 1234
+stop_on_eos = true
+
+[generation.strategy]
+kind = "greedy"
+
+[runtime]
+backend = "flex"
+precision = "f32"

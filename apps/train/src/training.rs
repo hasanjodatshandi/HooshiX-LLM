@@ -12,7 +12,7 @@
 //! model, step, evaluate, checkpoint, report.
 
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use burn::tensor::Device;
 use llm_checkpoint::{CHECKPOINT_FORMAT_VERSION, CheckpointMetadata, DataCursor};
@@ -158,6 +158,12 @@ pub fn run(config: &ExperimentConfig, device: &Device) -> Result<RunReport, Trai
     let mut checkpoints = Vec::new();
     let mut evaluations = Vec::new();
     let mut batches = Vec::with_capacity(accumulation);
+    let started = Instant::now();
+
+    // Progress is reported about a hundred times over a run, so a short run still
+    // shows a curve and a long one does not flood the log. A configured interval
+    // would be a second thing to keep in sync with `max_steps` for no gain.
+    let log_every = (config.training.max_steps / 100).max(1);
 
     for _ in 0..config.training.max_steps {
         batches.clear();
@@ -168,6 +174,31 @@ pub fn run(config: &ExperimentConfig, device: &Device) -> Result<RunReport, Trai
         let (updated, metrics) = trainer.step(model, &batches)?;
         model = updated;
 
+        // A run reports as it goes. The configured run is measured in days, and a
+        // process that prints nothing until it finishes cannot be told apart from
+        // one that has hung — which is the state a long run spends most of its
+        // life in.
+        if metrics.step.is_multiple_of(log_every) {
+            let elapsed = started.elapsed().as_secs_f64();
+            let tokens = trainer.log().tokens_seen();
+            let rate = if elapsed > 0.0 {
+                tokens as f64 / elapsed
+            } else {
+                0.0
+            };
+            let per_step = elapsed / metrics.step.max(1) as f64;
+            let remaining = config.training.max_steps.saturating_sub(metrics.step) as f64;
+            println!(
+                "llm-train: step {:>7}/{}  loss {:>8.4}  lr {:.3e}  {:.0} tok/s  elapsed {:.0}m  eta {:.0}m",
+                metrics.step,
+                config.training.max_steps,
+                metrics.train_loss,
+                metrics.learning_rate,
+                rate,
+                elapsed / 60.0,
+                remaining * per_step / 60.0,
+            );
+        }
         if metrics
             .step
             .is_multiple_of(config.training.evaluation_interval_steps)
