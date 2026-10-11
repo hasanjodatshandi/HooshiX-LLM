@@ -230,3 +230,92 @@ addition rather than a rewrite:
 happen. Adding a modality to the model belongs on that list, and any future
 implementation must also state how a non-text token is represented, how it is
 positioned, and how it is excluded from the text objective.
+
+## ADR-019 — The CubeCL `cpu` backend is not a speed path
+
+**Status:** Accepted
+
+Two external research reports, written without seeing this repository, both ranked
+"benchmark `Device::cpu()`" as the cheapest untried speed path. It was not
+untried, and the record of it contradicted itself: `11_BENCHMARKING.md` §11
+claimed `cpu` was 1.37× **faster** than `flex`, while §14, `25_STAGE1_ACCEPTANCE_REPORT.md`,
+`14_STAGE1_IMPLEMENTATION_CHECKLIST.md` and `apps/train/src/device.rs` all claimed
+roughly 3× **slower**.
+
+**Decision**
+
+`cpu` is **3.1×–3.3× slower** than `flex`, and §11's ratio column was void.
+§11 computed its ratios against a `flex` baseline that §12 subsequently withdrew;
+the `cpu` column reproduces across two sessions (70 and 72 tokens/s at 8 × 512)
+and the `flex` column it was divided by does not. Measured within one session:
+`cpu` at 56.9–58.3 s per step against `flex` at 17.2–18.4 s. The arithmetic is in
+`26_OPTIMIZATION_RESEARCH_REVIEW.md` §4.
+
+1. **`cpu` is not a candidate for making training faster.** No further research
+   on it is worth commissioning.
+2. **It stays selectable and correct.** Removing the feature would remove the
+   ability to measure the backend, which is how the figures above were obtained.
+   `apps/train/src/device.rs` keeps its `backend_caveat()` warning, with corrected
+   numbers.
+3. **Its one durable finding is the JIT cost**: the first step at a new shape
+   takes 9–18 minutes of LLVM kernel compilation (735 s at 8 × 512, 1082 s at
+   1 × 2048). That is a property of the backend and is unaffected by the
+   correction.
+
+**Consequence for the specification**
+
+`11_BENCHMARKING.md` §11 carries a correction notice and void ratio columns;
+every surviving `cpu` figure in the repository now names its session.
+
+## ADR-020 — Fused or chunked linear + cross-entropy is deferred until a GPU path exists
+
+**Status:** Deferred
+
+Both reports ranked a fused or chunked `linear_cross_entropy` highly, because the
+output head materialises a `[tokens, vocabulary]` tensor. It is a **memory**
+measure: report B states its purpose is to make `sequence = 2048` fit, not to go
+faster.
+
+**Decision:** deferred, because the measurements do not support the priority.
+
+1. The head is about **15% of a step**. `11_BENCHMARKING.md` §13 fits
+   `step = 2.7 s + 12 × 1.31 s`: the twelve blocks are ~85%, and the embedding, LM
+   head, objective and optimizer together are the rest.
+2. At 8 × 512, logits plus `log_softmax` are about **1 GiB of a 9,680 MiB peak** —
+   roughly 11%, and that peak is dominated by retained activations.
+3. **The measured GPU ceiling is not explained by logits alone.** The threshold
+   sits between 512 and 1,024 total tokens, where raw logits are 64–128 MiB
+   (`26_OPTIMIZATION_RESEARCH_REVIEW.md` §F2). §17's claim that the ceiling *is*
+   the logits tensor is directionally plausible and **not demonstrated**; the
+   allocation peak at the target shape has not been measured.
+
+**It must be justified by a measured allocation peak at the target shape**, not
+by arithmetic on the full target. Cost is estimated at 4–10 days plus a custom
+backward. Priority one is wall-clock, and this does not move it on the shapes that
+already run.
+
+## ADR-021 — Gradient checkpointing and Adafactor remain untried, and are memory-only
+
+**Status:** Deferred
+
+Both were recommended. Both are reachable in Burn 0.22 and neither has been run
+here. They are deferred together because they share one property: **neither can
+improve the priority-one metric**, which is wall-clock.
+
+1. **`gradient_checkpointing()`** exists as one line —
+   `burn-tensor-0.22.0/src/device.rs:540`, and it panics if autodiff is off at
+   line 535. It recomputes activations in the backward pass, so it buys memory
+   with time. `BalancedCheckpointing` is not whole-block rematerialisation: it
+   classifies operations as memory-bound or compute-bound and applies
+   `RetroForward` selectively (`burn-autodiff-0.22.0/src/checkpoint/strategy.rs:36-95`).
+   Keep it in reserve for a shape that does not fit, not as a speed measure.
+2. **Adafactor** exists with factored second moments and **no first moment**
+   (`burn-optim-0.22.0/src/optim/adafactor.rs:53-55, 76-80`), which roughly halves
+   optimizer state. Its defaults are `relative_step = true` and
+   `scale_parameter = true` (`:39-43`), and with those on, the configured
+   `learning_rate` **stops being an absolute rate**. Wiring it is therefore not a
+   configuration change but a change of optimization algorithm, requiring a
+   convergence decision and a retune, not a one-line switch.
+
+**Consequence:** both stay unmeasured and are recorded as memory measures. Neither
+appears in a "how do we go faster" list.

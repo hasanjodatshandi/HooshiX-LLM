@@ -166,33 +166,65 @@ synthetic batch:
 
 ## 11. Second baseline: the `cpu` (CubeCL) backend
 
+> **Corrected 2026-10-11.** This section's `flex` column is the baseline that
+> section 12 **withdrew**, and all three of its ratios are computed against that
+> column, so **all three ratios are void**. The `cpu` figures are sound and are
+> kept; the comparison they were drawn against is not. The corrected conclusion is
+> below the table, and the arithmetic is in section 4 of
+> `26_OPTIMIZATION_RESEARCH_REVIEW.md`.
+>
+> Section 12 states the rule that decides this: only measurements taken within one
+> run, or alternating between binaries, mean anything. Section 11's `flex` column
+> came from a different session and is not reproducible.
+
 Measured 2026-10-10 on the same machine, after the `cpu` backend was unblocked
 (see `13_DEPENDENCIES_AND_TOOLCHAIN.md` section 5). Same model, same
 configuration, same commit line; only the backend differs.
 
 | batch | sequence | flex tokens/s | cpu tokens/s | ratio |
 |---|---|---|---|---|
-| 8 | 512 | 51 | **70** | 1.37× |
-| 4 | 2048 | 54 | **64** | 1.19× |
-| 1 | 2048 | 51 | 41 | 0.80× |
+| 8 | 512 | ~~51~~ | **70** | ~~1.37×~~ **void** |
+| 4 | 2048 | ~~54~~ | **64** | ~~1.19×~~ **void** |
+| 1 | 2048 | ~~51~~ | 41 | ~~0.80×~~ **void** |
+
+**The corrected comparison, from one session**
+
+Section 14 measured both backends in the same session at batch 8 × sequence 512,
+which is 4,096 tokens per step:
+
+| | s/step | tokens/s | session |
+|---|---|---|---|
+| `cpu` | 56.9 and 58.3 | 72 and 70 | section 14 |
+| `flex` | 17.2–17.27 | 238 | section 12 |
+| `flex` | 18.40 | 223 | section 13 |
+
+`4096 / 56.9 = 72.0`, `4096 / 18.40 = 222.6`, `4096 / 17.20 = 238.1`.
+
+**`cpu` is 3.1× to 3.3× slower than `flex`, not 1.37× faster.** Its own figure
+reproduces across two sessions (70 and 72 tokens/s in sections 11 and 14), and the
+`flex` figure it was compared against does not.
 
 **Findings**
 
-- `cpu` is faster where there is enough work per step to keep the cores busy and
-  slower where there is not. At batch 1 it is 20% behind the reference path.
+- **`cpu` is slower than the reference path at every shape where both have been
+  measured in the same session.** It is not a speed path. It remains selectable
+  and correct, and removing it would remove the ability to measure it.
 - **The first step costs 9 to 18 minutes.** CubeCL compiles its kernels with LLVM
   on first use: 735 s at batch 8 × sequence 512, 1082 s at batch 1 × 2048. This is
   a one-time cost per shape and per process, and it dominates anything short. A
   throughput figure taken from the first step would be wrong by two orders of
-  magnitude, which is why the benchmark reports warmup separately.
-- Both backends are within 1.4× of each other. The CPU path is a real but modest
-  improvement, not the order-of-magnitude change that would make the configured
-  Stage-1 run reachable: 1.64B tokens at 64 tokens/s is still about 296 days.
+  magnitude, which is why the benchmark reports warmup separately. This finding is
+  unaffected by the correction and remains the most useful thing in this section.
+- At 139 tokens/s for the configured Stage-1 shape on `flex`, 1.64B tokens is about
+  136 days; on `cpu` at roughly a third of that rate it would be several hundred
+  days.
 
 **What this does not say**
 
-- `wgpu` and `cuda` are unmeasured. Neither has been built, because neither has
-  hardware here.
+- `wgpu` and `cuda` were unmeasured when this section was written. `wgpu` has
+  since been measured: it works, and it is 4.3×–8.9× the reference path at the
+  shapes it fits on a 4 GB card (section 17 and `14_STAGE1_IMPLEMENTATION_CHECKLIST.md`
+  section K).
 - The batch 8 × sequence 2048 shape, which the reference path could not allocate,
   was **not** attempted on `cpu`. Whether the CubeCL path fits where `flex` did
   not is unknown and must not be assumed.
@@ -323,7 +355,7 @@ the intended metric, per section 8.
 |---|---|---|---|
 | 1 | A real BLAS, via the `ndarray` backend | `burn/ndarray` builds, but the step is **30.9 s, 132 tok/s — 1.7× slower** than `flex`. Burn 0.22 marks `Device::ndarray` deprecated in favour of `flex`. The BLAS-backed variants (`blas-openblas`, `blas-openblas-system`, `blas-netlib`, `blas-accelerate`) were **not** tried: each needs a system or bundled BLAS and a Fortran toolchain, which is its own project. | **No** |
 | 2 | Tiled attention, so the score matrix never exists whole | Works, and is **correct** — a test compares a 3000-token tiled run against a 64-token whole run and requires the shared prefix to match. But where it applies it is **101.7 s against 67.8 s, 50% slower**, and it does **not** unblock the configured shape: the peak single allocation falls from 1.6 GB to 48 MB while the process still runs out, because autodiff retains every tile for the backward pass. | **No — reverted** |
-| 3 | `burn-fusion` | Burn 0.22's `fusion` feature enables it for `burn-cpu`, `burn-cuda`, `burn-rocm` and `burn-wgpu` — **not for `burn-flex`**, and `burn-flex` contains no fusion code at all. Measured on `cpu`, where it does apply: 56.9 s / 72 tok/s against 58.3 s / 70 tok/s without the tuned build. **No measurable gain**, and `cpu` remains 3× behind `flex`. | **No** |
+| 3 | `burn-fusion` | Burn 0.22's `fusion` feature enables it for `burn-cpu`, `burn-cuda`, `burn-rocm` and `burn-wgpu` — **not for `burn-flex`**, and `burn-flex` contains no fusion code at all. Measured on `cpu`, where it does apply: 56.9 s / 72 tok/s against 58.3 s / 70 tok/s without the tuned build. **No measurable gain**, and `cpu` is **3.1×–3.3× behind `flex`** in this same session — see section 11 for the corrected comparison and `26_OPTIMIZATION_RESEARCH_REVIEW.md` §4 for the arithmetic. | **No** |
 | 4 | A smaller vocabulary | Measured as a curve: 4096 → 15.49 s, 8192 → 15.64 s, 16384 → 16.66 s, 32768 → 18.23 s. Cutting to 4096 saves **15%**, and the curve is flat below 8192. A vocabulary change alters the tokenizer contract and needs its own decision, so nothing was changed here. | **Measured only** |
 | 5 | Gradient accumulation over micro-batches | **This is the one that worked.** The old implementation summed the micro-batch objectives and took a single backward pass, which gives the correct gradient but keeps every graph alive, so peak memory was the whole group. It now backwards each micro-batch and sums the gradients through a parameter visitor — `GradientsParams` has no addition operator, so the sum is built by visiting the model. Batch 8 × sequence 2048, which previously aborted on a 1.6 GB allocation, now runs at **136.9 s per step, 120 tokens/s**. The per-token rate is identical to the un-accumulated run at the same shape (121 tokens/s), so accumulation costs nothing measurable. | **Yes** |
 | 6 | An alternative allocator (mimalloc) | **No measurable difference**: 18.23 s against 18.20 s, within noise. The first run after the build reported 61.6 s, which was contamination from a concurrent process rather than the allocator; the same binary reproduced 18.23 s immediately afterwards. | **No** |
@@ -699,3 +731,134 @@ with no backend kernel behind it.
 - Whether Burn's attention beats the whole path on a quiet machine. It is 1%
   slower here, which is inside the drift, and the default decision waits on that
   re-measurement.
+
+## 18. The TinyStories configuration, measured
+
+Section 13's ablations led to an estimate of 600–800 tokens/s for the
+configuration that is actually going to be trained, and `26_OPTIMIZATION_RESEARCH_REVIEW.md`
+§F3 recorded that estimate as an estimate. This section replaces it with a
+measurement. **The estimate was close and the measured figure is slightly above
+it.**
+
+### Environment
+
+| | |
+|---|---|
+| CPU | 12th Gen Intel Core i7-12700K, 12 cores, 20 logical, 3600 MHz |
+| RAM | 63.7 GB total, 50.5 GB free at the time of the run |
+| operating system | Windows 11 Pro, build 28000 |
+| toolchain | rustc 1.99.0 (b940084d7 2026-09-28) |
+| backend | `flex`, f32 |
+| model | `configs/tinystories-small.toml`: 6 layers, hidden 512, 8 heads, vocab 8192, sequence 512 |
+| parameters | **24,648,192 (24.6 M)**, as printed by the binary |
+| harness | `cargo run --release -p llm-training --example throughput` |
+| warmup | 2 steps excluded; 5 timed steps |
+| concurrency | none — verified no `train`, `prepare` or `cargo` process was running |
+
+### Configured shape, 8 × 512
+
+```powershell
+$env:CONFIG="configs/tinystories-small.toml"
+$env:BATCH="8"; $env:SEQUENCE="512"; $env:STEPS="5"; $env:WARMUP="2"; $env:ACCUM="1"
+cargo run --release -p llm-training --example throughput
+```
+
+```text
+step 2: 5.0890s  loss 9.1049  805 tokens/s
+step 3: 7.1423s  loss 9.0898  573 tokens/s
+step 4: 5.1702s  loss 9.0697  792 tokens/s
+step 5: 5.1246s  loss 9.0450  799 tokens/s
+step 6: 5.1130s  loss 9.0160  801 tokens/s
+
+at batch 8, sequence 512: 5.5278s per step, 741 tokens/s
+```
+
+**741 tokens/s is the harness figure and it is dragged down by one outlier.**
+Four of the five timed steps ran at 5.09–5.17 s; step 3 took 7.14 s for reasons
+not identified, and the mean over five includes it. Excluding it the rate is
+**~799 tokens/s**. Both are reported because the harness prints the first and the
+steady state is the second, and quoting only the favourable one would be the
+mistake section 12 records.
+
+### Shape curve
+
+Same config, same warmup policy, 5 timed steps each, run in one session:
+
+| shape | tokens/step | s/step | tokens/s |
+|---|---|---|---|
+| 8 × 512 (configured) | 4,096 | 5.53 | **741** (799 without the outlier) |
+| 4 × 512 | 2,048 | 2.61 | **784** |
+| 2 × 512 | 1,024 | 1.50 | 681 |
+| 1 × 512 | 512 | 0.90 | 570 |
+| 4 × 1024 | 4,096 | 6.83 | 600 |
+| 2 × 2048 | 4,096 | 9.45 | 433 |
+| 1 × 2048 | 2,048 | 4.88 | 419 |
+
+**4 × 512 is the fastest shape measured, at 784 tokens/s**, marginally above the
+configured 8 × 512. Throughput falls as sequence length grows and rises with
+batch size at a fixed token count.
+
+Note that `4 × 1024` and `2 × 2048` run at sequence lengths **above** the model
+configuration's `max_sequence_length = 512`. The harness builds the batch
+directly and does not consult that field; RoPE computes positions beyond it
+without complaint. These are throughput measurements, not evidence that a
+sequence of 2,048 is meaningful for a model trained at 512, and they should not
+be read as such.
+
+### Against the 110 M configuration, alternating in one session
+
+Section 12 permits this comparison only within one session. Two rounds, both
+configurations, same shape, same warmup:
+
+| round | TinyStories (24.6 M) | Stage-1 (110.1 M) | ratio |
+|---|---|---|---|
+| 1 | 795 tokens/s | 229 tokens/s | 3.47× |
+| 2 | 813 tokens/s | 254 tokens/s | 3.20× |
+
+**The TinyStories model is 3.2×–3.5× faster than the Stage-1 model at 8 × 512.**
+The two 110 M figures, 229 and 254, sit inside the 186–238 range recorded
+elsewhere in this document.
+
+### Wall clock
+
+The configured run is **20,000 steps × 8 × 512 = 81,920,000 tokens**, at
+741 tokens/s:
+
+```text
+81,920,000 / 741 / 86,400 = 1.28 days
+```
+
+**About 1.28 days** — 30.7 hours — for the run as configured, at the measured
+rate, **excluding validation passes, checkpoint writes and the cost of loading
+the shard**; those are not in the throughput harness.
+
+At the steady-state 799 tokens/s the same run is 1.19 days. The honest statement
+is **1.2 to 1.3 days**.
+
+**That budget is 15.7% of one epoch.** The prepared training shard holds
+**520,848,384 tokens**, so one full pass at the measured rate is
+`520,848,384 / 741 / 86,400 = 8.1 days`, or 7.5 days at 799 tokens/s. The
+configured `max_steps` does not cover the corpus, which is a property of the
+configuration rather than of the machine.
+
+### The estimate, judged
+
+`26_OPTIMIZATION_RESEARCH_REVIEW.md` §F3 recorded two anchors: 388 tokens/s from
+extrapolating the layer-count ablation, and a 600–800 tokens/s estimate.
+
+- **The measurement is 741 tokens/s** at the configured shape, 799 at steady
+  state, and 784 at the best shape measured.
+- **The 600–800 estimate was close** — the measurement sits at its upper edge and
+  the best shape is just above it. It is not wrong enough to correct.
+- **The 388 anchor was wrong**, as §F3 said it might be. It came from scaling the
+  layer-count ablation linearly, and the real configuration also halves the hidden
+  size and quarters the vocabulary, which the linear scaling did not carry.
+
+The lesson is section 1's: the estimate pointed in the right direction and the
+measurement is what may be quoted.
+
+### Peak memory
+
+**Not measured.** The throughput harness does not sample it, and section 15
+records that the benchmark binary deliberately does not either — reading a peak
+working set needs an operating-system call this workspace does not make from Rust.

@@ -172,9 +172,14 @@ were never built for any other machine.
   unblocked `cpu` backend, and a working `wgpu` path.
 - **`cuda` has never been built or run.** No NVIDIA hardware exists here.
 - **`wgpu` has been run only on one machine**, with one 4 GB card.
-- **The `cpu` backend is about three times slower than `flex`** (72 against 235
-  tokens/s) and costs 9–18 minutes of LLVM kernel compilation before its first
-  step. It is correct, and it is slower.
+- **The `cpu` backend is 3.1×–3.3× slower than `flex`** — measured within one
+  session, where `cpu` took 56.9–58.3 s per 8 × 512 step (70–72 tokens/s) against
+  `flex` at 17.2–18.4 s (223–238 tokens/s) in sections 12 and 13 of
+  `11_BENCHMARKING.md`. An earlier version of this report compared 72 against 235,
+  which mixes a `cpu` figure from one session with a `flex` figure from another;
+  the ratio happened to be about right, the evidence was not. `cpu` also costs
+  9–18 minutes of LLVM kernel compilation before its first step. It is correct,
+  and it is slower.
 - **Checkpoint write throughput varies by more than 4× between runs** on the same
   bytes, because the machine carries about 30% background load. It should be
   quoted as a range.

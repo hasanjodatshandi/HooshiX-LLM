@@ -667,9 +667,10 @@ That expectation was wrong, and the correction is the main result here.
   slowly.
 - **Unsupported combinations, documented:** CUDA needs an NVIDIA card. ROCm
   needs GCN 3rd generation or newer, so it excludes this card, and is barely
-  supported on Windows regardless. `cpu` (CubeCL LLVM JIT) works but measured
-  about three times slower than `flex` and costs nine to eighteen minutes of
-  kernel compilation. `wgpu` works and is faster, but is bounded by 4 GB here.
+  supported on Windows regardless. `cpu` (CubeCL LLVM JIT) works but is
+  **3.1×–3.3× slower** than `flex` in the one session where both were measured
+  back to back (`11_BENCHMARKING.md` §11, §14), and costs nine to eighteen minutes
+  of kernel compilation. `wgpu` works and is faster, but is bounded by 4 GB here.
 
 ## L. Serving
 

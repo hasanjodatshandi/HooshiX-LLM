@@ -104,12 +104,13 @@ pub const fn backend_caveat() -> Option<&'static str> {
     {
         Some(
             "this binary runs on the CubeCL `cpu` backend. On the Stage-1 model it \
-             measured about three times slower than the Flex reference path (72 against \
-             235 tokens/s at batch 8 x sequence 512), and it compiles its kernels with \
-             LLVM on first use, which costs nine to eighteen minutes before the first \
-             step completes. It is correct, and it is slower. See \
-             docs/11_BENCHMARKING.md section 11. Build with the default `flex` feature \
-             unless you are deliberately measuring this backend.",
+             measured 3.1x to 3.3x slower than the Flex reference path within one \
+             session: 56.9 to 58.3 seconds per step at batch 8 x sequence 512, against \
+             17.2 to 18.4 seconds for flex in the same sessions. It also compiles its \
+             kernels with LLVM on first use, which costs nine to eighteen minutes before \
+             the first step completes. It is correct, and it is slower. See \
+             docs/11_BENCHMARKING.md sections 11 and 14. Build with the default `flex` \
+             feature unless you are deliberately measuring this backend.",
         )
     }
     #[cfg(not(feature = "cpu"))]
