@@ -493,3 +493,72 @@ that provably does not engage a BLAS would be worse than not having it.
 **Corrected:** the line in section 13 that read "needs a real GEMM — a BLAS, or
 attention built on one — and neither was reached here" is now precise: a BLAS was
 reached, linked, and is unreachable from Burn's tensor operations.
+
+## 17. Block-tiled attention: attempted, not correct, reverted, and the pitfalls recorded
+
+Section 13 and section 6 both name attention as roughly 40% of a step, and
+attention is what forces the `[batch, heads, sequence, sequence]` score tensor
+into memory — 1.6 GB at the configured shape, which is the allocation that fails
+on both the CPU and the 4 GB GPU. A block-tiled attention that never materialises
+that tensor is therefore the obvious next move, and it was attempted.
+
+**It was not delivered.** The implementation was written — query-dimension
+blocking, online softmax with a running max, sum and output accumulator,
+`TILE_QUERY_ROWS = 128`, a feature threaded through `llm-training`, and six
+correctness tests — and it **failed its own correctness test**, so it was never
+measured and every change was reverted. `git status --porcelain -uall` is empty.
+
+**This is not a "slower everywhere" result.** Nothing about its speed was
+established. It is "not implemented correctly yet", and the two must not be
+confused, because the failing version would have produced plausible-looking
+throughput figures for wrong logits.
+
+### The failure
+
+Wrong logits for the **first row of every query tile**, in the multi-tile case
+only. With `tile_rows = sequence` — one tile — the tiled path matched the
+reference exactly and the parameter gradients matched to `0.0`, which is what
+localises the fault to the tile boundary rather than to the arithmetic.
+
+### The five pitfalls, which are the expensive part and are worth keeping
+
+Each of these was found by fixing it and watching the failure move:
+
+1. **The mask offset must be anchored to the tile's first query row**, as
+   `key_start + shift - start`. Variants that anchor it anywhere else put the
+   causal diagonal in the wrong place, and only for the leading row.
+2. **The online-softmax rescale factor must use the *running* maximum, not the
+   current block's maximum.** Using the block maximum scales the accumulated
+   output by the wrong constant and the result comes out about 3× too large.
+3. **`f32::MIN - finite` overflows to `-inf`.** Clamping a block maximum with
+   `f32::MIN` therefore poisons an entire row. The clamp belongs on the *shifted*
+   score: `(scores - block_max).clamp_min(f32::MIN).exp()`.
+4. **An all-masked row makes `exp(-inf - -inf)` produce `NaN`**, which needs an
+   explicit all-masked zero factor rather than relying on the arithmetic.
+5. **`last_index` must be a key *index*, not a key *position*.** The two differ
+   by `key_length - sequence`, and the difference is invisible in the
+   single-tile case.
+
+### A measurement correction, and a caution about measuring while building
+
+A concurrent session recorded `1 × 512` on `wgpu` failing with
+`wgpu error: Out of memory` and concluded the GPU ceiling had fallen since
+section 14. That conclusion was wrong, and the cause was the measuring
+environment: another process was deleting a 42 GB build directory at the same
+time. Re-measured on a quiet machine, the same binary gives **382 tokens/s** at
+`1 × 512` and **479 tokens/s** at `2 × 256`, which reproduces the recorded 383
+and is consistent with 514. The section 14 figures stand.
+
+The lesson is section 12's, one level down: a measurement taken while the machine
+is busy is not a measurement. This is the second time in this document that a
+concurrent workload produced a false result, and the first time it produced a
+false *regression* — a number that was wrong in the pessimistic direction is no
+more trustworthy than one that was wrong in the optimistic direction.
+
+### What a follow-up needs
+
+Either finish it — the reproduction is
+`cargo test -p llm-model --features tiled-attention` failing on
+`tiled_attention_reproduces_the_whole_matrix_logits` — or abandon it explicitly
+in an ADR. Do not report a `wgpu` throughput figure for the tiled path until that
+command is green.
