@@ -160,10 +160,16 @@ pub fn run(config: &ExperimentConfig, device: &Device) -> Result<RunReport, Trai
     let mut batches = Vec::with_capacity(accumulation);
     let started = Instant::now();
 
-    // Progress is reported about a hundred times over a run, so a short run still
+    // Progress is reported about a thousand times over a run, so a short run still
     // shows a curve and a long one does not flood the log. A configured interval
     // would be a second thing to keep in sync with `max_steps` for no gain.
-    let log_every = (config.training.max_steps / 100).max(1);
+    //
+    // A thousand rather than a hundred because of what the interval means in wall
+    // clock: at the TinyStories configuration a step is about 5.5 s, so a
+    // hundredth of a 20,000-step run is eighteen minutes of silence between lines,
+    // which is indistinguishable from a hang to anyone watching. A thousandth is
+    // under two minutes.
+    let log_every = (config.training.max_steps / 1000).max(1);
 
     for _ in 0..config.training.max_steps {
         batches.clear();

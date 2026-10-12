@@ -1,7 +1,7 @@
 # 26 — Optimization research review, and three work orders
 
 **Date:** 2026-10-11
-**Status:** review complete; no work order started
+**Status:** review complete. WO-1, WO-2 and WO-3 were executed in `c62f899` — the TinyStories path measured 741 tokens/s (about 1.28 days for the configured run) and the `cpu` backend record is reconciled in every document that carried it.
 **Scope of this document:** analysis and documentation only. It proposes no source change.
 
 ---
