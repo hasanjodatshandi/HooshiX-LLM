@@ -69,10 +69,29 @@ struct Arguments {
     /// Row group size to read at a time. Larger is faster and holds more memory.
     #[arg(long, default_value_t = 8192)]
     batch: usize,
+
+    /// Print the file's schema and exit.
+    ///
+    /// Exists because a dataset that ships its own `language_score`,
+    /// `quality_score` or `minhash_cluster_size` columns has already done work
+    /// this pipeline would otherwise repeat, and the only way to know is to look.
+    #[arg(long)]
+    schema: bool,
 }
 
 fn main() -> ExitCode {
     let arguments = Arguments::parse();
+
+    if arguments.schema {
+        return match print_schema(&arguments.input) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err((code, message)) => {
+                eprintln!("convert: {message}");
+                ExitCode::from(code)
+            }
+        };
+    }
+
     match run(&arguments) {
         Ok(written) => {
             println!(
@@ -86,6 +105,31 @@ fn main() -> ExitCode {
             ExitCode::from(code)
         }
     }
+}
+
+/// Prints every column and its Arrow type, then the first row group's size.
+///
+/// A dataset's own scores are worth more than anything this project can compute
+/// from the text, because they come from the pipeline that produced the data and
+/// from models trained for the language in question. Reading the schema first is
+/// how that is discovered rather than assumed.
+fn print_schema(input: &Path) -> Result<(), (u8, String)> {
+    let file =
+        File::open(input).map_err(|error| (EXIT_IO, format!("{}: {error}", input.display())))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .map_err(|error| (EXIT_PARQUET, format!("{}: {error}", input.display())))?;
+
+    let schema = builder.schema();
+    let metadata = builder.metadata();
+
+    println!("{}", input.display());
+    println!("  rows          {}", metadata.file_metadata().num_rows());
+    println!("  row groups    {}", metadata.num_row_groups());
+    println!("  columns       {}", schema.fields().len());
+    for field in schema.fields() {
+        println!("    {:<24} {}", field.name(), field.data_type());
+    }
+    Ok(())
 }
 
 fn run(arguments: &Arguments) -> Result<u64, (u8, String)> {

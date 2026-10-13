@@ -7,6 +7,65 @@
 
 ---
 
+## 0. Correction: the dataset already ships most of this
+
+**Added 2026-10-12, after reading the real schema.** This section corrects the
+rest of the document, which was written before anyone had looked at the file.
+
+`apps/convert --schema` on the real Persian shard:
+
+```text
+artifacts\raw\bilingual\fa-fineweb2-000.parquet
+  rows          2645000
+  row groups    2645
+  columns       11
+    text                  Utf8
+    id                    Utf8
+    dump                  Utf8
+    url                   Utf8
+    date                  Utf8
+    file_path             Utf8
+    language              Utf8
+    language_score        Float64
+    language_script       Utf8
+    minhash_cluster_size  Int64
+    top_langs             Utf8
+```
+
+| What sections 3 to 6 design | What the file already has |
+|---|---|
+| Language identification | **`language`, `language_score`, `top_langs`** |
+| Script classification | **`language_script`** |
+| Near-duplicate MinHash, ~200 lines | **`minhash_cluster_size`** |
+| Cluster tracking for the split rule | **`id`** |
+| Per-source boilerplate keying | **`url`, `dump`** |
+
+**So the sections below over-design.** What actually has to be built is much
+smaller:
+
+1. **A reader that keeps the metadata columns, not just `text`.** `apps/convert`
+   currently writes `{"text": …}` and throws the other ten columns away, which
+   discards the dataset's own work. That is the first thing to fix.
+2. **Per-script heuristic rules** — section 4 stands unchanged; the dataset
+   filtered for language, not for the shape of Persian prose.
+3. **Boilerplate removal keyed on `url`** — better than the corpus-wide line
+   frequency in section 6, because a site's furniture is a property of the site.
+4. **Decontamination** — section 2 stage 10 stands.
+5. **Use `language_score` and `minhash_cluster_size` as thresholds rather than
+   recomputing them.**
+
+**Sections 3, 5 and the memory arithmetic in section 5 are kept for the record
+and for the case where a source arrives without metadata.** They are not the work.
+
+**A second consequence:** the plan document's instruction to check for
+`quality_score` was worth following. There is no `quality_score` column here —
+FineWeb2 ships `language_score` and a dedup cluster size, and its separate
+FineWeb2-HQ release is where quality filtering lives. **That means a quality
+score has to come from FineWeb2-HQ or not at all**, and the pilot's decision to
+skip a quality classifier (section 7) is what remains.
+
+---
+
 ## 1. The finding that shapes this design
 
 Most of the machinery **already exists** in `crates/llm-data/src/filter.rs`:
@@ -251,15 +310,18 @@ gone would catch more than any synthetic case.
 
 ## 10. What has to be decided before building
 
-| Question | Why it blocks |
-|---|---|
-| The Persian stopword list — write it or take it? | it is the single rule that decides whether Persian survives |
-| The boilerplate frequency threshold | 40 % is a guess; too low removes repeated quotations, too high leaves furniture |
-| Whether dedup is global or per shard | global is correct and costs memory; per shard is cheap and leaks across shards |
-| Who writes the Persian evaluation set | decontamination cannot run without it, and it must exist before the corpus is finalised |
+**Four questions were put to the project owner and answered on 2026-10-12.**
+Recorded here with the decision, so they are not reopened.
 
-**None of these is answerable from the research.** Each needs either a decision
-from the project owner or a measurement from the pilot.
+| Question | Decision |
+|---|---|
+| The Persian stopword list — write it or take it? | **Write it, in this repository, with tests.** It is the single rule that decides whether Persian survives, and a list taken from elsewhere has unknown provenance and an unknown source corpus. Roughly eighty words, and it must include verb prefixes — `می`, `نمی`, `ها` — or Persian stopword density reads low on every document and the rule mis-fires in the opposite direction |
+| The boilerplate threshold | **Aggressive, with two thresholds.** A line on more than **20 % of documents from one host** is that site's furniture; a line on more than **5 % of all documents** crossed sites. To keep aggression from being blind, **the twenty lines with the highest removal counts are printed in the report**, so a reader can see whether furniture or legitimate repeated quotation was removed |
+| Whether dedup is global or per shard | **Global.** The dataset has already done it: `minhash_cluster_size` is a column. It gives the cluster *size*, not a cluster *id*, so it cannot be used to pick one representative per cluster — but it can be used to drop documents in large clusters, which is itself a quality signal, since a document duplicated five hundred times is spam or boilerplate |
+| Who writes the Persian evaluation set | **Written by the agent, and it exists now** at `configs/eval-prompts-bilingual.md`: eight Persian prompts, the same eight ideas in English, a three-axis rubric, and the decontamination check to run against it. It had to exist before the corpus does, because a set finalised afterwards is already inside the corpus |
+
+**Still open:** nothing in this list. The next step is building, and the first
+thing to build is the metadata reader in section 0.
 
 ---
 
