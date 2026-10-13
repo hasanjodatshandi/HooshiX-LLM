@@ -30,6 +30,7 @@ members = [
     "crates/llm-server",
     "apps/serve",
     "apps/bench",
+    "apps/convert",
 ]
 
 [workspace.package]
@@ -93,6 +94,22 @@ llm-training = { path = "crates/llm-training" }
 llm-inference = { path = "crates/llm-inference" }
 llm-checkpoint = { path = "crates/llm-checkpoint" }
 llm-server = { path = "crates/llm-server" }
+
+# --- Data preparation tooling ----------------------------------------------
+# Parquet is the format FineWeb2 publishes in, and FineWeb2's `fas_Arab` split is
+# the Persian source the bilingual plan names. This reader lives in a
+# data-preparation app rather than in `llm-data`: the training path reads plain
+# text and JSON lines, and a Parquet reader with its Arrow dependency tree has no
+# business in a core crate that the model and trainer link against.
+parquet = { version = "60", default-features = false, features = [
+    "arrow",
+    "snap",
+    "flate2",
+    "flate2-rust_backend",
+    "zstd",
+    "lz4",
+] }
+arrow-array = { version = "60", default-features = false }
 
 [workspace.lints.rust]
 # `unsafe` is prohibited in project code by default.

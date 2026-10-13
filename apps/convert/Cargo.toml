@@ -1,0 +1,18 @@
+[package]
+name = "convert"
+description = "Turn a downloaded dataset file into the line-oriented form the pipeline reads."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+clap = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+parquet = { workspace = true }
+arrow-array = { workspace = true }
+
+[lints]
+workspace = true
