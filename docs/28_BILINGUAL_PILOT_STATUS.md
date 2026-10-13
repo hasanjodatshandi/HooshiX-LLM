@@ -194,8 +194,9 @@ project has since produced a **false regression** the same way.
 
 | Question | Options |
 |---|---|
-| Which cleaning filters the pilot uses | see `29_DATA_CLEANING_RESEARCH.md`; the plan needs a chosen, documented set |
+| Which cleaning filters the pilot uses | see `29_DATA_CLEANING_RESEARCH.md` for what exists in the field and `30_CLEANING_PIPELINE_DESIGN.md` for what to build. Four additions: script classification, per-script rules, near-duplicate, boilerplate removal |
 | ~~Whether code stays in the pilot~~ | **Decided — excluded from training, kept in the tokenizer. See section 3.1.** |
+| The Persian stopword list, the boilerplate frequency threshold, whether dedup is global or per shard, and who writes the Persian evaluation set | all four block the cleaning build; none is answerable from research |
 
 ---
 
