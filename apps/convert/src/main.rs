@@ -1,4 +1,4 @@
-//! `convert`: turn a downloaded dataset file into the form the pipeline reads.
+﻿//! `convert`: turn a downloaded dataset file into the form the pipeline reads.
 //!
 //! # Why this exists
 //!
@@ -42,6 +42,8 @@ const EXIT_IO: u8 = 2;
 const EXIT_PARQUET: u8 = 3;
 /// The file does not hold the column that was asked for.
 const EXIT_NO_COLUMN: u8 = 4;
+/// A cleaning adapter could not be read or parsed.
+const EXIT_CONFIG: u8 = 5;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -77,6 +79,42 @@ struct Arguments {
     /// this pipeline would otherwise repeat, and the only way to know is to look.
     #[arg(long)]
     schema: bool,
+
+    /// Per-language cleaning adapter, whose `[source]` section is applied here.
+    ///
+    /// The dataset ran a language model over every document and a global MinHash
+    /// over the whole corpus. Reading those columns is not laziness: recomputing
+    /// either would produce a second answer to a question already answered, from
+    /// a weaker method. What this project adds is the part the dataset does not
+    /// have, and that part starts in `llm-data`.
+    #[arg(long)]
+    adapter: Option<PathBuf>,
+}
+
+/// The `[source]` section of a per-language adapter.
+///
+/// Only the fields this tool uses are named. The adapter carries much more — the
+/// per-script heuristics, the stopword list, the normalization switches — and it
+/// is deliberately not an error to carry keys a particular consumer ignores,
+/// because the same file is read by two consumers with different jobs.
+#[derive(Debug, serde::Deserialize)]
+struct Adapter {
+    language: String,
+    source: SourceThresholds,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SourceThresholds {
+    min_language_score: f64,
+    max_minhash_cluster_size: i64,
+}
+
+impl Adapter {
+    fn load(path: &Path) -> Result<Self, (u8, String)> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|error| (EXIT_IO, format!("{}: {error}", path.display())))?;
+        toml::from_str(&text).map_err(|error| (EXIT_CONFIG, format!("{}: {error}", path.display())))
+    }
 }
 
 fn main() -> ExitCode {
@@ -133,6 +171,11 @@ fn print_schema(input: &Path) -> Result<(), (u8, String)> {
 }
 
 fn run(arguments: &Arguments) -> Result<u64, (u8, String)> {
+    let adapter = match &arguments.adapter {
+        Some(path) => Some(Adapter::load(path)?),
+        None => None,
+    };
+
     let file = File::open(&arguments.input)
         .map_err(|error| (EXIT_IO, format!("{}: {error}", arguments.input.display())))?;
 
@@ -174,18 +217,83 @@ fn run(arguments: &Arguments) -> Result<u64, (u8, String)> {
     let mut writer = BufWriter::new(output);
 
     let mut written: u64 = 0;
+    let mut dropped_language_score: u64 = 0;
+    let mut dropped_cluster: u64 = 0;
+    let mut lacked_metadata: u64 = 0;
+
+    // The threshold columns are looked up by name once, so a file that lacks them
+    // is reported rather than silently letting every row through unfiltered.
+    let score_index = arguments
+        .adapter
+        .as_ref()
+        .and_then(|_| schema.index_of("language_score").ok());
+    let cluster_index = arguments
+        .adapter
+        .as_ref()
+        .and_then(|_| schema.index_of("minhash_cluster_size").ok());
+
+    if let Some(adapter) = &adapter {
+        println!(
+            "convert: adapter `{}`, language {}, min_language_score {}, max_minhash_cluster_size {}",
+            arguments
+                .adapter
+                .as_ref()
+                .map_or_else(String::new, |p| p.display().to_string()),
+            adapter.language,
+            adapter.source.min_language_score,
+            adapter.source.max_minhash_cluster_size
+        );
+    }
+
     for batch in reader {
         let batch: RecordBatch =
             batch.map_err(|error| (EXIT_PARQUET, format!("reading a row group: {error}")))?;
+        let rows = batch.num_rows();
 
-        for text in texts(&batch, column_index).map_err(|message| (EXIT_PARQUET, message))? {
+        for row in 0..rows {
             if arguments.limit.is_some_and(|limit| written >= limit as u64) {
                 break;
             }
-            // A document that holds nothing is written anyway rather than
-            // dropped here: the pipeline counts what it drops and why, and a
-            // converter that quietly removes rows makes those counts wrong.
-            let line = serde_json::json!({ "text": text });
+            let text = text_at(&batch, column_index, row).map_err(|m| (EXIT_PARQUET, m))?;
+
+            // The dataset's own verdicts are applied before anything this project
+            // computes. A drop here is counted under the dataset's reason, not
+            // mixed in with ours, so the two are never confused in a report.
+            if let Some(adapter) = &adapter {
+                match score_index.and_then(|i| float_at(&batch, i, row)) {
+                    Some(score) if score < adapter.source.min_language_score => {
+                        dropped_language_score += 1;
+                        continue;
+                    }
+                    None => lacked_metadata += 1,
+                    _ => {}
+                }
+                match cluster_index.and_then(|i| int_at(&batch, i, row)) {
+                    Some(size) if size > adapter.source.max_minhash_cluster_size => {
+                        dropped_cluster += 1;
+                        continue;
+                    }
+                    None => lacked_metadata += 1,
+                    _ => {}
+                }
+            }
+
+            // Every column is carried through, not only the text. The dataset's
+            // own url, language, score and cluster size are the inputs the
+            // per-language rules need, and a converter that wrote `{"text": …}`
+            // would throw away the most reliable metadata in the corpus.
+            let mut object = serde_json::Map::new();
+            object.insert("text".to_owned(), serde_json::Value::String(text));
+            for (index, field) in schema.fields().iter().enumerate() {
+                if index == column_index {
+                    continue;
+                }
+                if let Some(value) = value_at(&batch, index, row) {
+                    object.insert(field.name().clone(), value);
+                }
+            }
+
+            let line = serde_json::Value::Object(object);
             writeln!(writer, "{line}").map_err(|error| (EXIT_IO, format!("writing: {error}")))?;
             written += 1;
         }
@@ -199,47 +307,63 @@ fn run(arguments: &Arguments) -> Result<u64, (u8, String)> {
         .flush()
         .map_err(|error| (EXIT_IO, format!("flushing: {error}")))?;
 
+    if adapter.is_some() {
+        println!(
+            "convert: kept {written}, dropped {dropped_language_score} below language_score, \
+             {dropped_cluster} above minhash_cluster_size, {lacked_metadata} missing a score"
+        );
+    }
+
     Ok(written)
 }
 
-/// Reads the text column of one batch, whichever string layout it uses.
+/// Reads one row's value from a column, as JSON, for every type this expects.
 ///
-/// Parquet files written by different producers use different Arrow types for
-/// the same logical column — `utf8` or `large_utf8` are both common, and which
-/// one appears depends on the writer's row-count assumptions rather than on the
-/// data. Accepting both is not defensive coding; it is the difference between
-/// reading FineWeb2 and failing on it.
-fn texts(batch: &RecordBatch, index: usize) -> Result<Vec<String>, String> {
+/// `None` for a null, an unexpected type, or an index past the end. The caller
+/// distinguishes "absent" from "present and failing a threshold", because a row
+/// with no language score has not been judged and must not be treated as judged.
+fn value_at(batch: &RecordBatch, index: usize, row: usize) -> Option<serde_json::Value> {
+    use arrow_array::{Float64Array, Int64Array};
+
     let column = batch.column(index);
-
+    if column.is_null(row) {
+        return None;
+    }
     if let Some(array) = column.as_any().downcast_ref::<StringArray>() {
-        return Ok((0..array.len())
-            .map(|row| {
-                if array.is_null(row) {
-                    String::new()
-                } else {
-                    array.value(row).to_owned()
-                }
-            })
-            .collect());
+        return Some(serde_json::Value::String(array.value(row).to_owned()));
     }
-
     if let Some(array) = column.as_any().downcast_ref::<LargeStringArray>() {
-        return Ok((0..array.len())
-            .map(|row| {
-                if array.is_null(row) {
-                    String::new()
-                } else {
-                    array.value(row).to_owned()
-                }
-            })
-            .collect());
+        return Some(serde_json::Value::String(array.value(row).to_owned()));
     }
+    if let Some(array) = column.as_any().downcast_ref::<Float64Array>() {
+        return serde_json::Number::from_f64(array.value(row)).map(serde_json::Value::Number);
+    }
+    if let Some(array) = column.as_any().downcast_ref::<Int64Array>() {
+        return Some(serde_json::Value::Number(array.value(row).into()));
+    }
+    None
+}
 
-    Err(format!(
-        "the text column is `{:?}`, which is neither utf8 nor large_utf8",
-        column.data_type()
-    ))
+fn text_at(batch: &RecordBatch, index: usize, row: usize) -> Result<String, String> {
+    match value_at(batch, index, row) {
+        Some(serde_json::Value::String(text)) => Ok(text),
+        Some(_) => Err("the text column is not a string".to_owned()),
+        None => Ok(String::new()),
+    }
+}
+
+fn float_at(batch: &RecordBatch, index: usize, row: usize) -> Option<f64> {
+    match value_at(batch, index, row) {
+        Some(serde_json::Value::Number(number)) => number.as_f64(),
+        _ => None,
+    }
+}
+
+fn int_at(batch: &RecordBatch, index: usize, row: usize) -> Option<i64> {
+    match value_at(batch, index, row) {
+        Some(serde_json::Value::Number(number)) => number.as_i64(),
+        _ => None,
+    }
 }
 
 /// Resolved path, used only in messages so a relative argument is unambiguous.

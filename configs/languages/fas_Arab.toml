@@ -1,0 +1,145 @@
+# Per-language cleaning adapter: Persian, as FineWeb2 labels it.
+#
+# One file per language, and the sections below are a ruleset rather than a set
+# of numbers. The English rules were tuned on English and they delete Persian:
+# their stopword list has no Persian words, their sentence-terminator rule
+# expects ASCII punctuation, and their symbol rule counts characters Persian uses
+# constantly. Every threshold here was chosen for this script.
+#
+# Two consumers read this file:
+#
+#   `apps/convert` reads `[source]`, which is applied against columns the dataset
+#   already provides. Reading them is not laziness: the dataset ran a language
+#   model over every document and a global MinHash across the whole corpus, and
+#   recomputing either would produce a second answer to a question already
+#   answered, from a weaker method.
+#
+#   `llm-data` will read the rest, on the text itself, because none of it is in
+#   the dataset and all of it is script-specific.
+
+language = "fas_Arab"
+display_name = "Persian"
+script = "Arabic"
+
+[source]
+# FineWeb2's own `language_score`, from the model that classified the document.
+#
+# 0.65 keeps Persian with English technical terms inside it, which is most
+# Persian technical writing and the most useful Persian in the corpus. The 0.85
+# used for single-language corpora would remove it.
+min_language_score = 0.65
+
+# FineWeb2's global MinHash cluster size. A document that appears five hundred
+# times is spam or site furniture, whatever it says.
+#
+# The column gives the cluster *size*, not a cluster id, so it cannot be used to
+# keep one representative per cluster. It can be used to drop the members of
+# large clusters, which is the part worth having.
+max_minhash_cluster_size = 100
+
+[text]
+# Character bounds, counted in characters rather than bytes: a byte threshold
+# penalises every non-Latin script by a factor of about two.
+#
+# The floor is higher than the English one because Persian web pages carry more
+# navigation furniture relative to their text.
+min_chars = 120
+max_chars = 200_000
+
+# Words, after normalization and ZWNJ handling.
+min_words = 25
+
+# Punctuation and symbols as a fraction of characters. Persian uses ، ؛ « » ٪
+# heavily and legitimately, so the set differs from the Latin one and the bound
+# is looser.
+max_symbol_ratio = 0.12
+
+# Function words as a fraction of words.
+#
+# The Persian list below is deliberately generous, and it includes the verb
+# prefixes می and نمی and the plural ها, because Persian attaches them and a list
+# of bare words under-counts every ordinary sentence.
+min_stopword_density = 0.04
+
+# The remaining rules are shared in shape with English and differ only in their
+# terminators and their bounds.
+max_ellipsis_line_ratio = 0.30
+max_bullet_line_ratio = 0.90
+min_terminator_line_ratio = 0.75
+
+# Mean word length, in characters.
+#
+# Persian words average shorter than English ones in characters while carrying
+# more morphology, so both bounds move down.
+min_mean_word_chars = 2.0
+max_mean_word_chars = 8.0
+
+# Characters that end a sentence in this script.
+#
+# ؟ is the Arabic question mark, ؛ the Arabic semicolon, » the closing guillemet
+# that Persian dialogue uses. Without them the rule sees most Persian sentences
+# as unterminated and drops the document.
+terminators = [".", "!", "?", "؟", "؛", "»", "…"]
+
+# Characters counted as symbols rather than as letters or sentence punctuation.
+# ، is the Persian comma and is as ordinary as a Latin comma.
+symbols = ["#", "%", "|", "\\", "©", "®", "™", "،", "؛", "«", "»", "٪", "*", "_", "~", "^"]
+
+# Stopwords.
+#
+# Written here rather than taken from elsewhere, because this list is the single
+# rule that decides whether a Persian corpus survives its own filter, and a list
+# of unknown provenance cannot be reviewed. It covers pronouns, prepositions,
+# conjunctions, the copula and the common verb forms, plus the prefixes and
+# suffixes Persian writes attached.
+[stopwords]
+words = [
+    # conjunctions and particles
+    "و", "یا", "اما", "ولی", "که", "اگر", "چون", "زیرا", "پس", "بنابراین", "بلکه", "نیز", "هم",
+    # prepositions
+    "از", "به", "در", "با", "بر", "برای", "بی", "تا", "بدون", "درباره", "توسط", "نزد", "طی", "ضمن",
+    # pronouns and determiners
+    "من", "تو", "او", "وی", "ما", "شما", "آنها", "ایشان", "این", "آن", "همین", "همان", "خود", "هر",
+    "همه", "هیچ", "چند", "چه", "کدام", "یک", "دیگر", "چنین", "چنان",
+    # the copula and common verbs
+    "است", "هست", "نیست", "بود", "نبود", "شد", "نشد", "می‌شود", "می‌شد", "کرد", "می‌کند", "دارد",
+    "داشت", "دارند", "دهد", "داد", "گرفت", "یافت", "شدند", "هستند", "بودند", "باشند", "باشد",
+    # adverbs and quantifiers
+    "بسیار", "خیلی", "کم", "بیشتر", "کمتر", "فقط", "حدود", "تقریباً", "دوباره", "هنوز", "همیشه",
+    "هرگز", "شاید", "احتمالاً", "البته", "قطعاً", "معمولاً", "اخیراً", "قبلاً", "اکنون", "اکنون",
+    # time words that carry no topic
+    "روز", "شب", "سال", "ماه", "هفته", "ساعت", "دقیقه", "امروز", "دیروز", "فردا", "حال", "زمان",
+    # attached forms taken as words, because the counter splits on whitespace and
+    # these do appear standing alone after ZWNJ handling
+    "می", "نمی", "ها", "های", "هایی", "تری", "ترین", "ام", "ات", "اش", "مان", "تان", "شان",
+]
+
+# Prefixes and suffixes that Persian writes attached to a stem.
+#
+# A stopword list over whitespace-separated words under-counts Persian, because
+# the language marks possession, plurality and verb aspect with affixes rather
+# than with separate words. Counting these as stopword evidence is what makes the
+# density rule meaningful in this script.
+[stopwords.affixes]
+prefixes = ["می", "نمی", "بی"]
+suffixes = ["ها", "های", "هایی", "تر", "ترین", "ام", "ات", "اش", "مان", "تان", "شان"]
+
+[normalization]
+# ZWNJ, U+200C. It joins letters inside a Persian word — میرود is one word, not
+# two — and it must never be treated as whitespace, as a separator, or as
+# punctuation. A filter that splits on it corrupts the language, and a tokenizer
+# that does splits every such word in half.
+preserve_zwnj = true
+
+# Arabic yeh and kaf to Persian yeh and kaf. The two are visually near-identical
+# and web text mixes them freely; without this the same word becomes two
+# different tokens.
+unify_arabic_yeh_kaf = true
+
+# Arabic diacritics. They are rare in modern Persian prose, they carry no meaning
+# at this scale, and they fragment tokens.
+strip_diacritics = true
+
+# Persian and Arabic-Indic digits to ASCII. Not cosmetic: without it ۱۳۹۱ and
+# 1391 are different tokens and the corpus loses the connection between them.
+unify_digits = true

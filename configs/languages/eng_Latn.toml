@@ -1,0 +1,82 @@
+# Per-language cleaning adapter: English, in the BCP-47 form FineWeb2 uses.
+#
+# The companion to `fas_Arab.toml`. Read the comment at the top of that file
+# first: the point of having two files is that the English rule set applied to
+# Persian deletes Persian, and the difference is the rules, not the numbers.
+#
+# Two consumers read this file:
+#
+#   `apps/convert` reads `[source]`, applied against columns the dataset provides.
+#   `llm-data` will read the rest, on the text itself.
+
+language = "eng_Latn"
+display_name = "English"
+script = "Latin"
+
+[source]
+# FineWeb2's own language score. English is the language the classifier is most
+# confident about, so the threshold can be tighter than Persian's without losing
+# code-switched text — English documents rarely carry another language's script.
+min_language_score = 0.80
+
+max_minhash_cluster_size = 100
+
+[text]
+min_chars = 100
+max_chars = 200_000
+min_words = 20
+
+# Latin punctuation. The Latin symbol set is narrower than the Persian one
+# because English prose does not use guillemets or an Arabic comma.
+max_symbol_ratio = 0.10
+min_stopword_density = 0.02
+
+max_ellipsis_line_ratio = 0.30
+max_bullet_line_ratio = 0.90
+min_terminator_line_ratio = 0.80
+
+# Mean word length. English words average longer in characters than Persian ones.
+min_mean_word_chars = 3.0
+max_mean_word_chars = 10.0
+
+terminators = [".", "!", "?", "\"", "…"]
+
+symbols = ["#", "%", "|", "\\", "©", "®", "™", "*", "_", "~", "^", "{", "}"]
+
+# The standard English function-word list.
+#
+# `{` and `}` appear in `symbols` above and are also the marker for code. The
+# code share of the corpus bypasses the prose rules entirely — see section 4 of
+# `docs/30_CLEANING_PIPELINE_DESIGN.md` — so this list is never applied to code
+# documents, and a document that trips it in the prose share is one where braces
+# really are noise.
+[stopwords]
+words = [
+    "a", "about", "above", "after", "again", "all", "also", "am", "an", "and", "any", "are", "as",
+    "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by",
+    "can", "could", "did", "do", "does", "doing", "down", "during", "each", "few", "for", "from",
+    "further", "had", "has", "have", "having", "he", "her", "here", "hers", "him", "his", "how",
+    "i", "if", "in", "into", "is", "it", "its", "just", "me", "more", "most", "my", "no", "nor",
+    "not", "now", "of", "off", "on", "once", "only", "or", "other", "our", "out", "over", "own",
+    "same", "she", "should", "so", "some", "such", "than", "that", "the", "their", "them", "then",
+    "there", "these", "they", "this", "those", "through", "to", "too", "under", "until", "up",
+    "very", "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom", "why",
+    "will", "with", "would", "you", "your",
+]
+
+# English marks number, tense and possession with separate words and with a
+# smaller set of endings than Persian, so affix counting is a much weaker signal
+# here. Kept for symmetry with the Persian adapter, and kept short.
+[stopwords.affixes]
+prefixes = []
+suffixes = ["s", "es", "ed", "ing", "ly"]
+
+[normalization]
+preserve_zwnj = false
+unify_arabic_yeh_kaf = false
+strip_diacritics = false
+
+# English already uses ASCII digits, so there is nothing to unify. The flag
+# exists so the two adapters have the same shape and a reader of one can read the
+# other.
+unify_digits = false
