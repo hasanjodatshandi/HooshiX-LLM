@@ -47,14 +47,60 @@ months.
 
 | Language | Share | Tokens | Source | Size |
 |---|---|---|---|---|
-| English | 50 % | 50 M | Comma v0.1 `project_gutenberg` | 114 MB per shard |
-| Persian | 40 % | 40 M | FineWeb2 `data/fas_Arab` | **4.6 GB per shard** |
-| Code | 10 % | 10 M | Comma v0.1 `stackv2_edu` | 949 MB per shard |
+| English | **55 %** | 55 M | Comma v0.1 `project_gutenberg` | 114 MB per shard |
+| Persian | **45 %** | 45 M | FineWeb2 `data/fas_Arab` | **4.6 GB per shard** |
+| ~~Code~~ | **0 % in the pilot** | — | Comma v0.1 `stackv2_edu` | downloaded, held back |
 
 **Why these sizes and not everything:** the full Stage-1 run needs about 11 GB of
 text. The sources hold about 595 GB. Downloading all of it to use 2 % is waste.
 Download proportionally, spread across shards, and expand only after the pipeline
 is proven.
+
+### 3.1 Decision: code is excluded from the pilot's training data, and kept in the tokenizer
+
+**Decided 2026-10-12.** The plan requires Persian, English **and code** in the
+mixture from the start of pretraining. That is right for the full run and wrong
+for the pilot, and the difference is scale.
+
+| Run | Total tokens | Code at 10 % | Does code teach anything? |
+|---|---|---|---|
+| **Pilot** | 100 M | **10 M** | **No.** Spread over Python, JS, Rust and the rest that is 1–2 M tokens per language. A model needs hundreds of millions of tokens of a language before it can do anything with it. |
+| **Full Stage-1** | 2–3 B | **200–300 M** | Yes. Enough to matter. |
+
+At the pilot's scale code is three costs and no benefit: a third variable to
+debug when Persian comes out wrong, vocabulary taken from Persian in a 24k
+tokenizer split three ways, and ten percent of a hundred million tokens spent on
+tokens that teach `def`, `{` and `return` and nothing else.
+
+**But the tokenizer is still trained on all three.** This is the part that must
+not be got wrong. A tokenizer built without code would have to be **rebuilt** when
+code is added to the full run, and rebuilding it changes the embedding shape and
+**invalidates every checkpoint trained with the old one**. So:
+
+| Stage | English | Persian | Code |
+|---|---|---|---|
+| Tokenizer training | yes | yes | **yes** — so it never needs rebuilding |
+| Pilot model training | 55 % | 45 % | **no** |
+| Full Stage-1 training | 50 % | 40 % | **10 %**, as the plan requires |
+
+The tokenizer is built once, frozen, and used unchanged by both runs.
+
+**Code is not dropped, it is deferred to its own experiment.** Once the bilingual
+pilot works, a small run adds code as the single changed variable and measures
+what it is worth. That is the one-change-per-run discipline of
+`29_DATA_CLEANING_RESEARCH.md` section 5, applied instead of guessing.
+
+**The 949 MB code shard is already downloaded** and stays on disk for that
+experiment.
+
+### 3.2 Why 55/45 and not 50/40/10
+
+Removing code leaves 100 % to split between two languages. The 55/45 split keeps
+English slightly ahead, which is deliberate: the tokenizer, the evaluation sets
+and most of the tooling are English-first, and a Persian share that fails will be
+visible sooner against an English share that works. The plan's 50/40/10 is a
+three-language ratio and does not survive the removal of the third language
+unchanged.
 
 ---
 
@@ -149,7 +195,24 @@ project has since produced a **false regression** the same way.
 | Question | Options |
 |---|---|
 | Which cleaning filters the pilot uses | see `29_DATA_CLEANING_RESEARCH.md`; the plan needs a chosen, documented set |
-| Whether code stays in the pilot | the owner said **yes, it must** |
+| ~~Whether code stays in the pilot~~ | **Decided — excluded from training, kept in the tokenizer. See section 3.1.** |
+
+---
+
+## 5b. Decisions taken, and why
+
+Each of these was a real fork. They are recorded with the reason so the next
+reader does not have to reopen them.
+
+| # | Decision | Reason | Date |
+|---|---|---|---|
+| D1 | **Code is out of the pilot's training data, in the tokenizer** | 10 M code tokens teach nothing and cost a third debug variable; a tokenizer built without code would have to be rebuilt later, and rebuilding invalidates every checkpoint | 2026-10-12 |
+| D2 | Pilot split is 55/45 English/Persian, not 50/40/10 | the third language is gone, so its share has to go somewhere; English slightly ahead makes a Persian failure visible against an English baseline that works | 2026-10-12 |
+| D3 | Parquet is converted by a separate Rust app, not read by `llm-data` | a Parquet reader brings an Arrow tree into the crate the model links against; if Parquet becomes a primary format rather than a source format, this reverses | 2026-10-12 |
+| D4 | Download proportionally, not everything | the full run needs ~11 GB of text from ~595 GB available; download for the run plus a margin for rejection, spread across shards | 2026-10-12 |
+| D5 | Heuristic filters are written once per script | the Gopher and C4 rule sets are English-shaped and delete Persian if applied unchanged — the stopword list has no Persian words | 2026-10-12 |
+| D6 | The quality classifier is skipped for the pilot, and recorded as skipped | it needs Persian human labels that do not exist, and the pilot's job is to prove the pipeline, not to build the best corpus | 2026-10-12 |
+| D7 | Stage 2 and Stage 3 of the bilingual plan are **not** started now | the repository is at roadmap Phase 1. SFT is Phase 2 work; DPO/RLCR/RLVR are Phase 5 | 2026-10-12 |
 
 ---
 
