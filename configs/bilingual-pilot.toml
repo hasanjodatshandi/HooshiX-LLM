@@ -1,0 +1,96 @@
+﻿# Bilingual pilot: Persian and English, 100M tokens, the Stage-1 architecture.
+#
+# The purpose is to answer one question in days rather than months: does the
+# pipeline produce a model that speaks Persian. If it does, the full Stage-1 run
+# is worth its time. If it does not, the fault is in the tokenizer, the mixture
+# or the cleaning, and finding that out after three billion tokens would be
+# expensive.
+#
+# What is deliberately the same as `stage1-110m.toml`:
+#   - the architecture, so the pilot measures the model that will actually be
+#     trained rather than a smaller stand-in whose behaviour does not transfer
+#   - vocab_size 32768, which is what `artifacts/tokenizer-bilingual.json` was
+#     trained for
+#
+# What is deliberately different:
+#   - sequence_length 512 rather than 2048. The 4 GB card's ceiling for this
+#     model is 512 tokens per micro-batch, measured in docs/11 section 20, and a
+#     pilot that cannot run on the GPU is a pilot that takes five days instead
+#     of two.
+#   - max_steps sized to one epoch over the pilot corpus rather than to a budget.
+#     At 8 x 512 that is 106113367 / 4096 = 25907 steps, rounded to 26000.
+#   - the corpus paths, which point at `artifacts/pilot-corpus` and
+#     `artifacts/pilot-data` and touch nothing the TinyStories run produced.
+#
+# Backend note: `wgpu` is the faster path for this model by 3.1x to 3.3x, measured
+# in docs/11 section 20. It is not the default here because the run's own
+# measurements are all on `flex` and the pilot should be reproducible against
+# them; switching is a one-line change and the numbers are in that section.
+
+version = 2
+
+[model]
+vocab_size = 32768
+hidden_size = 768
+num_layers = 12
+num_heads = 12
+num_kv_heads = 12
+ffn_intermediate_size = 2048
+max_sequence_length = 512
+rope_theta = 10000.0
+rms_norm_eps = 0.00001
+tie_embeddings = true
+linear_bias = false
+
+[tokenizer]
+vocab_size = 32768
+model = "bpe"
+artifact = "artifacts/tokenizer-bilingual.json"
+
+[tokenizer.special_tokens]
+bos = 0
+eos = 1
+pad = 2
+unk = 3
+
+[data]
+data_root = "artifacts/pilot-data"
+sequence_length = 512
+micro_batch_size = 8
+shuffle_seed = 0
+validation_basis_points = 100
+test_basis_points = 100
+split_seed = 0
+
+[training]
+max_steps = 26000
+data_parallel_world_size = 1
+gradient_accumulation_steps = 1
+seed = 0
+gradient_clip_global_norm = 1.0
+checkpoint_interval_steps = 2000
+evaluation_interval_steps = 500
+
+[training.optimizer]
+learning_rate = 0.0003
+weight_decay = 0.1
+beta1 = 0.9
+beta2 = 0.95
+epsilon = 1e-8
+
+[training.scheduler]
+warmup_steps = 1000
+cosine_iters = 26000
+
+[generation]
+max_new_tokens = 128
+seed = 0
+stop_on_eos = true
+
+[generation.strategy]
+kind = "greedy"
+
+[runtime]
+backend = "flex"
+precision = "f32"
+

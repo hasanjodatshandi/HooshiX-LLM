@@ -274,14 +274,61 @@ run whenever they are picked up.
 **Nothing is blocked on a quiet machine any more.** Both measurements are in
 `docs/11` with their tables and their conditions.
 
+### 5.2b What is left
+
+| Task | Why |
+|---|---|
+| **Run the pilot** | the corpus is prepared and the config validates. 26,000 steps over 101.6 M tokens |
+| Wire `Boilerplate` into the pipeline | it needs two passes over the sources and `pipeline.rs` reads them once. The module is written and tested; the plumbing is not |
+| Wire `Decontamination` into the pipeline | the module and its tool are written. The corpus reports 5 contaminated documents in 31,400, which the pipeline removes on their own merits |
+| Save the rest of the pilot corpus | only one Persian shard of twenty-four is downloaded, and the full run needs about 11 GB of text against 595 GB available |
+
 ### 5.3 Blocked on CPU being free
 
 | Task | Status |
 |---|---|
-| Convert the full 4.6 GB Persian Parquet | in progress |
-| Train the bilingual tokenizer (24k–32k, balanced across three languages) | in progress |
-| Prepare the bilingual shards | pending — took 89 minutes for a comparable TinyStories run |
-| ~~Fix `apps/train` to print validation loss during the run~~ | **DONE, and verified** on a 200-step run: `validation step 25/200 loss 7.9689 train 8.0074 gap -0.0385`. Exit 0. |
+| Convert the full 4.6 GB Persian Parquet | **DONE** — 2,645,000 rows, 8.3 % dropped by the adapter, 15,959.6 MB of JSON lines carrying all 11 columns |
+| Train the bilingual tokenizer | **DONE** — 32768 vocab, identity `c727beb3c4c31047cf37ff244598bbf2046610b64ed7198155deb12db6d7dbb1`, and the measurement that justifies it is in section 4.5 |
+| **Prepare the pilot corpus** | **DONE** — see section 4.6 |
+| Fix `apps/train` to print validation loss during the run | **DONE, and verified** on a 200-step run |
+
+### 4.6 The pilot corpus — prepared
+
+**2026-10-14.** `configs/bilingual-pilot.toml` and `configs/bilingual-pilot-sources.json`,
+prepared with both language adapters active.
+
+| | |
+|---|---|
+| Documents | 50,300 read, **48,614 kept**, 1,686 filtered, 0 duplicates |
+| **Train** | 47,674 documents, 198,527 sequences, **101,645,824 tokens** |
+| Validation | 466 documents, 1,697 sequences, 868,864 tokens |
+| Test | 474 documents, 1,778 sequences, 910,336 tokens |
+| Content hash | `711ee152b1a099f2f7d3a0824c0a17df05d14a040ec4b9ad68b4dac7eea29ffa` |
+
+**And the drop reasons are the point.** With the adapters wired up, the run
+reports:
+
+```text
+dropped 1669 for too_few_stopwords
+dropped   16 for too_long
+dropped    1 for too_many_symbols
+```
+
+`too_few_stopwords` is the per-script rule doing its job — 3.4 % of documents were
+prose-shaped enough to pass a length check and not language-shaped enough to keep.
+**Under the English rules that reason would have fired on every Persian document**,
+and the corpus would have been 100 % English with every counter reporting success.
+
+**The configuration is the Stage-1 model, not a smaller stand-in.** The test in
+`crates/llm-core/tests/config_files.rs` asserts the parameter count is *equal* to
+`stage1-110m.toml`'s, because a pilot that measures a different model measures
+nothing that transfers. Three things differ, each for a reason: `sequence_length`
+512 rather than 2048 because that is the 4 GB card's measured ceiling for this
+model; `max_steps` 26,000 because that is one epoch over this corpus rather than
+an arbitrary budget; and the paths, which point at `artifacts/pilot-data` and
+touch nothing the TinyStories run produced.
+
+### 5.3 Blocked on CPU being free
 
 ### 5.4 Awaiting a decision
 

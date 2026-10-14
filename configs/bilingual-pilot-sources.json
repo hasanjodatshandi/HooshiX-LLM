@@ -1,0 +1,22 @@
+[
+  {
+    "source_id": "fineweb2-fas-arab",
+    "source_name": "FineWeb2, Persian (fas_Arab), training split",
+    "origin": "FineWeb2, published by Hugging Face at https://huggingface.co/datasets/HuggingFaceFW/fineweb-2 . One shard downloaded: data/fas_Arab/train/000_00000.parquet (4618.1 MB, 2645000 rows) via the Hub's resolve URL with curl, no Python in the workflow. Converted with apps/convert: one JSON object per line carrying all 11 columns, with the per-language adapter's source thresholds applied (language_score >= 0.65, minhash_cluster_size <= 100). 8.3 percent of rows were dropped by the cluster bound and none by the language score. This file is a 48000-document prefix of that output, written as plain text for the tokenizer and the pilot corpus. No text was added, removed or reordered beyond the newline folding convert performs, which replaces a document's own line breaks with spaces because the output is line-oriented.",
+    "license": "ODC-By 1.0 (FineWeb2)",
+    "acquisition_date": "2026-10-14",
+    "content_type": { "kind": "plain_text" },
+    "language": "fa",
+    "path": "artifacts/pilot-corpus/persian.txt"
+  },
+  {
+    "source_id": "comma-v0.1-project-gutenberg",
+    "source_name": "Common Pile v0.1 / Comma, Project Gutenberg",
+    "origin": "Common Pile v0.1, published at https://huggingface.co/datasets/common-pile/comma_v0.1_training_dataset . One shard downloaded: project_gutenberg/project_gutenberg.chunk.00.jsonl.gz (114.3 MB) via the Hub's resolve URL with curl. The gzip stream is a raw gzip rather than a tar archive, so it was decoded in-process by apps/convert rather than with tar, and the text field of each JSON line was written as plain text. This file is a 2300-document prefix of that output. The underlying works are public domain; the Common Pile's own documentation describes it as public-domain and openly licensed text.",
+    "license": "Public domain (Project Gutenberg texts)",
+    "acquisition_date": "2026-10-14",
+    "content_type": { "kind": "plain_text" },
+    "language": "en",
+    "path": "artifacts/pilot-corpus/english.txt"
+  }
+]

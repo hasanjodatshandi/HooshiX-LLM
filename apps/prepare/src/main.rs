@@ -21,8 +21,8 @@ use std::process::ExitCode;
 use clap::Parser;
 use llm_core::ExperimentConfig;
 use llm_data::{
-    DatasetManifest, InvalidUtf8Policy, PrepareRequest, ShardExpectation, SourceSpec, TailPolicy,
-    prepare, validate_shard,
+    DatasetManifest, InvalidUtf8Policy, LanguageRules, PrepareRequest, ShardExpectation,
+    SourceSpec, TailPolicy, prepare, validate_shard,
 };
 use llm_tokenizer::LlmTokenizer;
 
@@ -64,6 +64,16 @@ struct Cli {
     /// length and batches need no padding.
     #[arg(long)]
     keep_tail: bool,
+    /// Per-language cleaning adapter. Repeat for each language in the corpus.
+    ///
+    /// Without one, only the script-neutral rules run: a length window and the
+    /// credential detector. **That is not a safe default for a non-Latin
+    /// corpus.** The prose rules are what reject a keyword list, a bullet dump or
+    /// a page of navigation, and they are written per writing system because the
+    /// English ones delete Persian. Naming the adapters is how a run says which
+    /// rules it was judged by, and the count is reported either way.
+    #[arg(long = "language", value_name = "PATH")]
+    languages: Vec<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -93,12 +103,24 @@ fn main() -> ExitCode {
         }
     };
 
+    let mut languages = Vec::with_capacity(cli.languages.len());
+    for path in &cli.languages {
+        match LanguageRules::load(path) {
+            Ok(rules) => languages.push(rules),
+            Err(error) => {
+                eprintln!("prepare-cli: {error}");
+                return ExitCode::from(EXIT_SOURCES);
+            }
+        }
+    }
+
     let request = PrepareRequest {
         output_root: cli.output,
         sources,
         data: config.data.clone(),
         filters: llm_data::FilterConfig {
             min_chars: cli.min_chars,
+            languages,
             ..llm_data::FilterConfig::default()
         },
         invalid_utf8: InvalidUtf8Policy::Reject,
@@ -116,6 +138,26 @@ fn main() -> ExitCode {
             return ExitCode::from(EXIT_PIPELINE);
         }
     };
+
+    // Which rules judged the corpus, said out loud.
+    //
+    // A run with no adapters is not the same run as one with them and produces a
+    // different corpus, and the two are indistinguishable from the shard counts.
+    // The manifest carries the filter version; this carries the languages.
+    if request.filters.languages.is_empty() {
+        println!(
+            "prepare: rules         script-neutral only (length window and credentials); \
+             pass --language to add the per-script prose rules"
+        );
+    } else {
+        let names: Vec<&str> = request
+            .filters
+            .languages
+            .iter()
+            .map(|rules| rules.language.as_str())
+            .collect();
+        println!("prepare: rules         {}", names.join(", "));
+    }
 
     report(&manifest, &request.output_root);
     verify_shards(&manifest, &request.output_root)

@@ -80,11 +80,75 @@ fn tinystories_small_loads_and_validates() {
 }
 
 #[test]
+fn bilingual_pilot_loads_and_validates() {
+    let config = ExperimentConfig::load(config_path("bilingual-pilot.toml"))
+        .expect("configs/bilingual-pilot.toml must load and validate");
+
+    // The pilot measures the model that will actually be trained, so the
+    // architecture has to match `stage1-110m.toml` rather than being a smaller
+    // stand-in whose behaviour does not transfer.
+    let stage1 = ExperimentConfig::load(config_path("stage1-110m.toml")).expect("loads");
+    assert_eq!(config.model.vocab_size, stage1.model.vocab_size);
+    assert_eq!(config.model.hidden_size, stage1.model.hidden_size);
+    assert_eq!(config.model.num_layers, stage1.model.num_layers);
+    assert_eq!(config.model.num_heads, stage1.model.num_heads);
+    assert_eq!(
+        config.model.parameter_count().expect("fits"),
+        stage1.model.parameter_count().expect("fits"),
+        "the pilot must be the same model, not a smaller one"
+    );
+
+    // Sized against the bilingual tokenizer, which was trained for 32768.
+    assert_eq!(config.tokenizer.vocab_size, 32768);
+    assert_eq!(config.model.vocab_size, config.tokenizer.vocab_size);
+    assert!(
+        config
+            .tokenizer
+            .artifact
+            .as_deref()
+            .is_some_and(|path| path.to_string_lossy().contains("bilingual")),
+        "the pilot must name the bilingual tokenizer, not the TinyStories one"
+    );
+
+    // The 4 GB card's ceiling for this model is 512 tokens per micro-batch,
+    // measured in docs/11 section 20. A pilot that cannot use the faster backend
+    // is a pilot that takes three days longer than it needs to.
+    assert_eq!(config.data.sequence_length, 512);
+    assert!(config.model.max_sequence_length >= config.data.sequence_length);
+
+    // One epoch over the prepared corpus rather than an arbitrary budget.
+    let per_step = config.data.micro_batch_size as u64
+        * config.data.sequence_length as u64
+        * config.training.gradient_accumulation_steps as u64;
+    let tokens = per_step * config.training.max_steps;
+    assert!(
+        (90_000_000..=115_000_000).contains(&tokens),
+        "the pilot is meant to be one epoch over about 100M tokens, got {tokens}"
+    );
+
+    // The scheduler must not outlive the run or the learning rate never reaches
+    // its floor, and must not end early or it decays to nothing and keeps going.
+    assert_eq!(
+        config.training.scheduler.cosine_iters,
+        config.training.max_steps
+    );
+    assert!(config.training.scheduler.warmup_steps < config.training.max_steps);
+
+    // Nothing the TinyStories run wrote may be touched.
+    assert!(
+        config.data.data_root.to_string_lossy().contains("pilot"),
+        "the pilot must write to its own data root, got {}",
+        config.data.data_root.display()
+    );
+}
+
+#[test]
 fn shipped_configs_round_trip_through_toml() {
     for name in [
         "stage1-110m.toml",
         "stage1-smoke.toml",
         "tinystories-small.toml",
+        "bilingual-pilot.toml",
     ] {
         let config = ExperimentConfig::load(config_path(name)).expect("loads");
         let text = config.to_toml_string().expect("serializes");
