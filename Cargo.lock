@@ -1715,6 +1715,7 @@ version = "0.1.0"
 dependencies = [
  "arrow-array",
  "clap",
+ "flate2",
  "parquet",
  "serde",
  "serde_json",

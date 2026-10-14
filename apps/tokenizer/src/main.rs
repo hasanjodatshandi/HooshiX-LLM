@@ -13,6 +13,8 @@
 
 mod corpus;
 
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -72,6 +74,30 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         artifact: PathBuf,
     },
+
+    /// Report how efficiently an artifact encodes each corpus file.
+    ///
+    /// Exists because a shared tokenizer over three writing systems can look
+    /// perfectly healthy — a vocab size, an identity hash, no errors — while
+    /// having quietly allocated almost none of its vocabulary to one of them.
+    /// The number that shows it is characters per token, and it has to be read
+    /// per language: a Persian text needing three times the tokens of an English
+    /// text of the same length has a tokenizer that was trained mostly on
+    /// English, whatever its configuration says.
+    Stats {
+        /// Experiment configuration describing the vocabulary contract.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        /// Tokenizer artifact to measure.
+        #[arg(long, value_name = "PATH")]
+        artifact: PathBuf,
+        /// A UTF-8 file to measure. Repeat for several; each is reported apart.
+        #[arg(long = "corpus", value_name = "PATH", required = true)]
+        corpora: Vec<PathBuf>,
+        /// Stop after this many lines of each file.
+        #[arg(long, value_name = "N", default_value_t = 2000)]
+        lines: usize,
+    },
 }
 
 fn main() -> ExitCode {
@@ -83,7 +109,84 @@ fn main() -> ExitCode {
             min_frequency,
         } => train(&config, &corpora, &output, min_frequency),
         Command::Hash { config, artifact } => hash(&config, &artifact),
+        Command::Stats {
+            config,
+            artifact,
+            corpora,
+            lines,
+        } => stats(&config, &artifact, &corpora, lines),
     }
+}
+
+/// Reports characters per token and tokens per line, per corpus file.
+///
+/// Characters rather than bytes, because a byte ratio would flatter Persian: the
+/// Arabic script costs two bytes per character in UTF-8, so a Persian text that
+/// tokenizes badly can still look acceptable when measured in bytes. Characters
+/// are the honest denominator across scripts.
+fn stats(config_path: &Path, artifact: &Path, corpora: &[PathBuf], limit: usize) -> ExitCode {
+    let config = match tokenizer_config(config_path) {
+        Ok(config) => config,
+        Err(code) => return ExitCode::from(code),
+    };
+
+    let tokenizer = match LlmTokenizer::load(artifact, &config) {
+        Ok(tokenizer) => tokenizer,
+        Err(error) => {
+            eprintln!("tokenizer-cli: {error}");
+            return ExitCode::from(EXIT_TOKENIZER);
+        }
+    };
+
+    println!("tokenizer-cli: vocab size = {}", tokenizer.vocab_size());
+    println!(
+        "tokenizer-cli: {:<28} {:>10} {:>10} {:>12}",
+        "file", "chars", "tokens", "chars/token"
+    );
+
+    for path in corpora {
+        let file = match File::open(path) {
+            Ok(file) => file,
+            Err(error) => {
+                eprintln!("tokenizer-cli: {}: {error}", path.display());
+                return ExitCode::from(EXIT_CORPUS);
+            }
+        };
+
+        let mut characters: u64 = 0;
+        let mut tokens: u64 = 0;
+
+        for line in BufReader::new(file).lines().take(limit) {
+            let line = match line {
+                Ok(line) => line,
+                Err(error) => {
+                    eprintln!("tokenizer-cli: {}: {error}", path.display());
+                    return ExitCode::from(EXIT_CORPUS);
+                }
+            };
+            characters += line.chars().count() as u64;
+            match tokenizer.encode(&line) {
+                Ok(encoded) => tokens += encoded.len() as u64,
+                Err(error) => {
+                    eprintln!("tokenizer-cli: {}: {error}", path.display());
+                    return ExitCode::from(EXIT_TOKENIZER);
+                }
+            }
+        }
+
+        let per_token = if tokens == 0 {
+            0.0
+        } else {
+            characters as f64 / tokens as f64
+        };
+        let label = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        println!("tokenizer-cli: {label:<28} {characters:>10} {tokens:>10} {per_token:>12.2}");
+    }
+
+    ExitCode::SUCCESS
 }
 
 /// Loads an experiment configuration and returns its tokenizer section.

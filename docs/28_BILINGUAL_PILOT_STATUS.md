@@ -164,11 +164,12 @@ Chat is Stage 5 work.
    luck, and it was not a plan.** A run that starts to memorise shows it in this
    line first, and it now appears every `evaluation_interval_steps`:
 
-### 4.3 Pilot data — downloaded
+### 4.3 Pilot data — downloaded, converted, and the tokenizer trained
 
 | File | Size |
 |---|---|
 | `artifacts/raw/bilingual/fa-fineweb2-000.parquet` | 4618.1 MB |
+| `artifacts/raw/bilingual/fa-fineweb2-000.jsonl` | **15,959.6 MB** (converted output) |
 | `artifacts/raw/bilingual/en-gutenberg-00.jsonl.gz` | 114.3 MB |
 | `artifacts/raw/bilingual/code-stackv2edu-00.jsonl.gz` | 948.5 MB |
 
@@ -192,6 +193,57 @@ match the version `parquet` uses (60, not 56).
 boilerplate** — `نوشته شده در ... توسط behrouz`, navigation words like `درباره`,
 stray `+`. Filtering is not optional, and `29_DATA_CLEANING_RESEARCH.md` is the
 research into what filtering to build.
+
+### 4.5 The bilingual tokenizer — trained, and it is the whole point
+
+**Trained 2026-10-14.** 32768 vocabulary, byte-level BPE, from a balanced sample
+of all three languages in one pass.
+
+| Source | Sample | Share |
+|---|---|---|
+| Persian (FineWeb2) | 140.9 MB | 42.7 % |
+| English (Gutenberg) | 145.7 MB | 44.1 % |
+| Code (stackv2_edu) | 43.7 MB | 13.2 % |
+
+| | |
+|---|---|
+| Artifact | `artifacts/tokenizer-bilingual.json` |
+| Vocab | 32768, matching `configs/stage1-110m.toml` |
+| **Identity** | **`c727beb3c4c31047cf37ff244598bbf2046610b64ed7198155deb12db6d7dbb1`** |
+| Training time | 17.9 s |
+| Code is in the tokenizer, and **not** in the pilot's training data | decision D1 |
+
+**And the measurement that justifies the whole exercise.** The same three files,
+through the bilingual tokenizer and through the English-only TinyStories one:
+
+| Language | English-only, vocab 8192 | **Bilingual, vocab 32768** | Improvement |
+|---|---|---|---|
+| **Persian** | **0.57** chars/token | **3.70** | **6.5×** |
+| English | 3.14 | 4.11 | 1.31× |
+| Code | 1.60 | 3.30 | 2.06× |
+
+**0.57 characters per token means 1.75 tokens per character.** The English-only
+tokenizer emitted more than one token for every Persian letter, so the same
+compute would have bought **6.5× less Persian**. That is not a rounding error and
+it is not a preference; it is the difference between a Persian model and no
+Persian model.
+
+**This is the failure `29_DATA_CLEANING_RESEARCH.md` warned about, measured
+rather than argued.** The warning was that English-shaped tooling deletes Persian
+while every counter reports success. Here nothing even reports an error — the
+tokenizer trains, loads, encodes and decodes perfectly, and simply costs six and
+a half times as much.
+
+**Reproduce it with:**
+
+```powershell
+.\target\release\tokenizer-cli.exe stats --config configs\stage1-110m.toml `
+    --artifact artifacts\tokenizer-bilingual.json `
+    --corpus <persian.txt> --corpus <english.txt> --corpus <code.txt>
+```
+
+Characters rather than bytes, deliberately: the Arabic script costs two bytes per
+character in UTF-8, so a byte ratio would flatter Persian and hide exactly this.
 
 ---
 

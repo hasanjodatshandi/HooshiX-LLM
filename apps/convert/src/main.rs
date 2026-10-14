@@ -1,4 +1,4 @@
-﻿//! `convert`: turn a downloaded dataset file into the form the pipeline reads.
+//! `convert`: turn a downloaded dataset file into the form the pipeline reads.
 //!
 //! # Why this exists
 //!
@@ -28,7 +28,7 @@
 #![deny(unsafe_code)]
 
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -89,6 +89,15 @@ struct Arguments {
     /// have, and that part starts in `llm-data`.
     #[arg(long)]
     adapter: Option<PathBuf>,
+
+    /// Write plain text, one document per line, instead of JSON.
+    ///
+    /// The tokenizer trainer consumes UTF-8 text and learns merges over whatever
+    /// it is given. Handed JSON lines it would learn `{"text": "` as a token,
+    /// because that prefix appears once per document — spending vocabulary on
+    /// structural noise and distorting every token count afterwards.
+    #[arg(long, value_name = "PATH")]
+    plain_text: Option<PathBuf>,
 }
 
 /// The `[source]` section of a per-language adapter.
@@ -119,6 +128,39 @@ impl Adapter {
 
 fn main() -> ExitCode {
     let arguments = Arguments::parse();
+
+    // A JSON lines input is not Parquet and is handled by its own path. The
+    // extension decides, because that is what a caller has to go on and a wrong
+    // guess fails immediately rather than producing a wrong corpus.
+    //
+    // `.jsonl.gz` is matched as a whole rather than by extension, because that
+    // name's extension is `gz` and its content is still JSON lines.
+    let name = arguments
+        .input
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let is_jsonl = name.ends_with(".jsonl") || name.ends_with(".jsonl.gz");
+
+    if is_jsonl {
+        return match extract_text(&arguments) {
+            Ok(written) => {
+                println!(
+                    "convert: wrote {written} documents to {}",
+                    arguments
+                        .plain_text
+                        .as_ref()
+                        .unwrap_or(&arguments.output)
+                        .display()
+                );
+                ExitCode::SUCCESS
+            }
+            Err((code, message)) => {
+                eprintln!("convert: {message}");
+                ExitCode::from(code)
+            }
+        };
+    }
 
     if arguments.schema {
         return match print_schema(&arguments.input) {
@@ -170,12 +212,92 @@ fn print_schema(input: &Path) -> Result<(), (u8, String)> {
     Ok(())
 }
 
+/// Reads JSON lines and writes the text field of each, one document per line.
+///
+/// Used for the Common Pile shards, which are already JSON lines with a `text`
+/// field, and for producing tokenizer training text from anything this tool has
+/// converted. A line that does not parse is counted and skipped rather than
+/// ending the run: a shard of a million documents should not be lost to one bad
+/// record, and the count says whether it was one or many.
+fn extract_text(arguments: &Arguments) -> Result<u64, (u8, String)> {
+    let source = File::open(&arguments.input)
+        .map_err(|error| (EXIT_IO, format!("{}: {error}", arguments.input.display())))?;
+
+    // Common Pile ships raw gzip streams rather than tar archives, which is why
+    // `tar` refuses them. Decoding here also means the decompressed shard never
+    // has to exist: 950 MB of intermediate JSON lines is disk this project does
+    // not spend, and the pass reads, converts and discards in one go.
+    let reader: Box<dyn BufRead> = if arguments
+        .input
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gz"))
+    {
+        Box::new(BufReader::with_capacity(
+            1 << 20,
+            flate2::read::MultiGzDecoder::new(source),
+        ))
+    } else {
+        Box::new(BufReader::with_capacity(1 << 20, source))
+    };
+
+    let destination = arguments.plain_text.as_ref().unwrap_or(&arguments.output);
+    let output = File::create(destination)
+        .map_err(|error| (EXIT_IO, format!("{}: {error}", destination.display())))?;
+    let mut writer = BufWriter::with_capacity(1 << 20, output);
+
+    let mut written: u64 = 0;
+    let mut unparsed: u64 = 0;
+    let mut without_text: u64 = 0;
+
+    for line in reader.lines() {
+        let line = line.map_err(|error| (EXIT_IO, format!("reading: {error}")))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if arguments.limit.is_some_and(|limit| written >= limit as u64) {
+            break;
+        }
+
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            unparsed += 1;
+            continue;
+        };
+        let Some(text) = value
+            .get(&arguments.column)
+            .and_then(|field| field.as_str())
+        else {
+            without_text += 1;
+            continue;
+        };
+
+        // A document's own newlines are not preserved as line breaks, because
+        // the output is line-oriented and a line break inside a document would
+        // split it in two for every reader downstream. Paragraph structure is
+        // kept as a single space, which is what the tokenizer sees anyway.
+        writeln!(writer, "{}", text.replace('\n', " "))
+            .map_err(|error| (EXIT_IO, format!("writing: {error}")))?;
+        written += 1;
+    }
+
+    writer
+        .flush()
+        .map_err(|error| (EXIT_IO, format!("flushing: {error}")))?;
+
+    if unparsed > 0 || without_text > 0 {
+        println!(
+            "convert: {unparsed} line(s) did not parse as JSON, {without_text} had no `{}` field",
+            arguments.column
+        );
+    }
+
+    Ok(written)
+}
+
 fn run(arguments: &Arguments) -> Result<u64, (u8, String)> {
     let adapter = match &arguments.adapter {
         Some(path) => Some(Adapter::load(path)?),
         None => None,
     };
-
     let file = File::open(&arguments.input)
         .map_err(|error| (EXIT_IO, format!("{}: {error}", arguments.input.display())))?;
 
@@ -212,9 +334,14 @@ fn run(arguments: &Arguments) -> Result<u64, (u8, String)> {
         )
     })?;
 
-    let output = File::create(&arguments.output)
-        .map_err(|error| (EXIT_IO, format!("{}: {error}", arguments.output.display())))?;
-    let mut writer = BufWriter::new(output);
+    // One destination, decided once: plain text when the tokenizer path asked
+    // for it, JSON lines otherwise. Deciding it here rather than inside the loop
+    // keeps the write itself to a single branch.
+    let destination = arguments.plain_text.as_ref().unwrap_or(&arguments.output);
+    let output = File::create(destination)
+        .map_err(|error| (EXIT_IO, format!("{}: {error}", destination.display())))?;
+    let mut writer = BufWriter::with_capacity(1 << 20, output);
+    let plain = arguments.plain_text.is_some();
 
     let mut written: u64 = 0;
     let mut dropped_language_score: u64 = 0;
@@ -282,6 +409,17 @@ fn run(arguments: &Arguments) -> Result<u64, (u8, String)> {
             // own url, language, score and cluster size are the inputs the
             // per-language rules need, and a converter that wrote `{"text": …}`
             // would throw away the most reliable metadata in the corpus.
+            //
+            // Unless plain text was asked for, in which case only the text is
+            // written and the metadata is dropped here — which is why the
+            // tokenizer path is the only caller that asks for it.
+            if plain {
+                writeln!(writer, "{}", text.replace('\n', " "))
+                    .map_err(|error| (EXIT_IO, format!("writing: {error}")))?;
+                written += 1;
+                continue;
+            }
+
             let mut object = serde_json::Map::new();
             object.insert("text".to_owned(), serde_json::Value::String(text));
             for (index, field) in schema.fields().iter().enumerate() {
