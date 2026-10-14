@@ -81,6 +81,22 @@ pub enum TrainError {
         path: PathBuf,
     },
 
+    /// A checkpoint's cursor names a shard this run is not reading.
+    ///
+    /// Refused rather than ignored. The training reader opens one shard, so a
+    /// cursor naming another one describes a different run -- and resuming from it
+    /// at shard zero would silently continue from the wrong place in the data.
+    // Constructed by `ShardBatches::seek_cursor`, which only the tests call until
+    // the `--resume` path exists. See that method.
+    #[allow(dead_code)]
+    #[error("checkpoint cursor names shard {shard}, but `{path}` is the only shard this run reads")]
+    CursorShardMismatch {
+        /// Shard this run is reading.
+        path: PathBuf,
+        /// Shard the cursor names.
+        shard: u64,
+    },
+
     /// Checkpoints from an earlier run are already in the way.
     ///
     /// Checkpoint publication refuses to replace an existing directory, because

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use burn::tensor::Device;
-use llm_checkpoint::{CHECKPOINT_FORMAT_VERSION, CheckpointMetadata, DataCursor};
+use llm_checkpoint::{CHECKPOINT_FORMAT_VERSION, CheckpointMetadata};
 use llm_core::ExperimentConfig;
 use llm_data::{DatasetManifest, Split};
 use llm_model::Transformer;
@@ -252,11 +252,12 @@ pub fn run(config: &ExperimentConfig, device: &Device) -> Result<RunReport, Trai
                     .map_or(0, |elapsed| elapsed.as_secs()),
                 global_step: metrics.step,
                 tokens_seen: trainer.log().tokens_seen(),
-                data_cursor: DataCursor {
-                    epoch: train.passes(),
-                    shard: 0,
-                    sequence: 0,
-                },
+                // The real position, not a placeholder. This read sequence 0
+                // at every checkpoint, so every checkpoint claimed the run was
+                // at the start of the shard, and a resume would have silently
+                // re-read data the model had already seen -- the one failure a
+                // resume cannot report, because the loss looks fine either way.
+                data_cursor: train.cursor(),
                 config_hash: String::new(),
                 tokenizer_identity: identity.clone(),
                 dataset_manifest_hash: dataset_hash.clone(),
