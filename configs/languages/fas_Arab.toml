@@ -1,4 +1,4 @@
-# Per-language cleaning adapter: Persian, as FineWeb2 labels it.
+﻿# Per-language cleaning adapter: Persian, as FineWeb2 labels it.
 #
 # One file per language, and the sections below are a ruleset rather than a set
 # of numbers. The English rules were tuned on English and they delete Persian:
@@ -56,9 +56,15 @@ max_symbol_ratio = 0.12
 
 # Function words as a fraction of words.
 #
-# The Persian list below is deliberately generous, and it includes the verb
-# prefixes می and نمی and the plural ها, because Persian attaches them and a list
-# of bare words under-counts every ordinary sentence.
+# The Persian list carries the attached forms — می, نمی, ها, های — as entries of
+# their own, which is where Persian morphology is handled here.
+#
+# A note on how this number was set. An earlier version of the filter also
+# matched prefixes and suffixes, and it passed a plain list of thirty-one Iranian
+# city names at 9.7 % density, because ایلام ends in the possessive ام and بیرجند
+# begins with بی. The affix machinery is gone and this floor now means what it
+# says. It is still a starting value and should be measured against the corpus
+# before it is trusted; `llm_data::filter::measure` reports the distribution.
 min_stopword_density = 0.04
 
 # The remaining rules are shared in shape with English and differ only in their
@@ -90,8 +96,8 @@ symbols = ["#", "%", "|", "\\", "©", "®", "™", "،", "؛", "«", "»", "٪",
 # Written here rather than taken from elsewhere, because this list is the single
 # rule that decides whether a Persian corpus survives its own filter, and a list
 # of unknown provenance cannot be reviewed. It covers pronouns, prepositions,
-# conjunctions, the copula and the common verb forms, plus the prefixes and
-# suffixes Persian writes attached.
+# conjunctions, the copula and the common verb forms. The attached forms — می,
+# نمی, ها, های, هایی — are entries here rather than a separate affix rule.
 [stopwords]
 words = [
     # conjunctions and particles
@@ -114,15 +120,6 @@ words = [
     "می", "نمی", "ها", "های", "هایی", "تری", "ترین", "ام", "ات", "اش", "مان", "تان", "شان",
 ]
 
-# Prefixes and suffixes that Persian writes attached to a stem.
-#
-# A stopword list over whitespace-separated words under-counts Persian, because
-# the language marks possession, plurality and verb aspect with affixes rather
-# than with separate words. Counting these as stopword evidence is what makes the
-# density rule meaningful in this script.
-[stopwords.affixes]
-prefixes = ["می", "نمی", "بی"]
-suffixes = ["ها", "های", "هایی", "تر", "ترین", "ام", "ات", "اش", "مان", "تان", "شان"]
 
 [normalization]
 # ZWNJ, U+200C. It joins letters inside a Persian word — میرود is one word, not
@@ -143,3 +140,5 @@ strip_diacritics = true
 # Persian and Arabic-Indic digits to ASCII. Not cosmetic: without it ۱۳۹۱ and
 # 1391 are different tokens and the corpus loses the connection between them.
 unify_digits = true
+
+

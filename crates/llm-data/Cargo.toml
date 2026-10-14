@@ -14,6 +14,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+# Per-language cleaning adapters live in `configs/languages/` as TOML, next to
+# the corpus rather than compiled into this crate, so a threshold can be changed
+# and reviewed without a rebuild.
+toml = { workspace = true }
 
 [lints]
 workspace = true

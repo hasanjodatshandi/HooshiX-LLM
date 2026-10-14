@@ -195,4 +195,29 @@ pub enum DataError {
     /// The tokenizer failed.
     #[error(transparent)]
     Tokenizer(#[from] llm_tokenizer::TokenizerError),
+
+    /// A per-language cleaning adapter could not be read.
+    #[error("failed to read language adapter `{path}`")]
+    LanguageAdapterRead {
+        /// Path that was read.
+        path: PathBuf,
+        /// The underlying I/O failure.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// A per-language cleaning adapter is not valid.
+    ///
+    /// Separate from the read failure because the two want different responses:
+    /// a missing file is a path problem, while a file that will not parse or
+    /// that names a script which does not exist is a content problem — and the
+    /// second is the one that can silently turn one language's rules into
+    /// another's while every counter reports a healthy run.
+    #[error("language adapter `{path}` is not valid: {reason}")]
+    LanguageAdapterInvalid {
+        /// Path that was read, or a placeholder for an in-memory adapter.
+        path: PathBuf,
+        /// What was wrong with it.
+        reason: String,
+    },
 }

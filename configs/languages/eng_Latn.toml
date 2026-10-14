@@ -1,4 +1,4 @@
-# Per-language cleaning adapter: English, in the BCP-47 form FineWeb2 uses.
+﻿# Per-language cleaning adapter: English, in the BCP-47 form FineWeb2 uses.
 #
 # The companion to `fas_Arab.toml`. Read the comment at the top of that file
 # first: the point of having two files is that the English rule set applied to
@@ -64,12 +64,6 @@ words = [
     "will", "with", "would", "you", "your",
 ]
 
-# English marks number, tense and possession with separate words and with a
-# smaller set of endings than Persian, so affix counting is a much weaker signal
-# here. Kept for symmetry with the Persian adapter, and kept short.
-[stopwords.affixes]
-prefixes = []
-suffixes = ["s", "es", "ed", "ing", "ly"]
 
 [normalization]
 preserve_zwnj = false
@@ -80,3 +74,4 @@ strip_diacritics = false
 # exists so the two adapters have the same shape and a reader of one can read the
 # other.
 unify_digits = false
+

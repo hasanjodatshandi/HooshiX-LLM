@@ -24,20 +24,24 @@
 pub mod dedup;
 pub mod error;
 pub mod filter;
+pub mod language;
 pub mod manifest;
 pub mod normalize;
 pub mod pack;
 pub mod pipeline;
+pub mod script;
 pub mod shard;
 pub mod source;
 pub mod split;
 
 pub use error::DataError;
 pub use filter::{CredentialShape, FilterConfig, FilterReason};
+pub use language::LanguageRules;
 pub use manifest::{DatasetManifest, MANIFEST_VERSION};
 pub use normalize::{InvalidUtf8Policy, normalize};
 pub use pack::{PACKING_VERSION, PackingStats, SequencePacker, TailPolicy};
 pub use pipeline::{PrepareRequest, prepare};
+pub use script::{Script, ScriptProfile};
 pub use shard::{
     SHARD_FORMAT_VERSION, ShardExpectation, ShardReader, ShardSummary, ShardWriter, validate_shard,
 };
