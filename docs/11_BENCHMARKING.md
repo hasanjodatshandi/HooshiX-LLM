@@ -862,3 +862,111 @@ measurement is what may be quoted.
 **Not measured.** The throughput harness does not sample it, and section 15
 records that the benchmark binary deliberately does not either — reading a peak
 working set needs an operating-system call this workspace does not make from Rust.
+
+---
+
+## 19. The unidentified bottleneck, identified: it is parallel scaling, and the run decays
+
+Section 13 left an open question. The CPU ran at about a sixth of its FP32 peak,
+a fifth of its cores and a fraction of a percent of its memory bandwidth, and the
+cause was not known. A first attempt to answer it with a thread sweep was made
+while training was active and produced nothing but noise; section 14 row 6 is the
+standing rule that forbids benchmarking under load.
+
+The TinyStories run finished, the machine went idle, and the sweep was repeated.
+
+### 19.1 The measurement
+
+24.6M model, `flex`, f32, 8×512, 15 timed steps after 3 warmup, on an otherwise
+idle machine. **Every configuration below was run in one session, back to back, on
+the same binary.** One row is missing: `RAYON_NUM_THREADS=20` produced no result
+and was not retried, because 12 and 16 already showed the plateau.
+
+| `RAYON_NUM_THREADS` | tokens/s | s per step | speedup |
+|---|---|---|---|
+| 1 | 453 | 9.032 | 1.00× |
+| 2 | 648 | 6.319 | 1.43× |
+| 4 | 808 | 5.070 | 1.78× |
+| 8 | 904 | 4.533 | **2.00×** |
+| 12 | 895 | 4.577 | 1.98× |
+| 16 | 905 | 4.528 | **2.00×** |
+
+**Sixteen times the threads buys twice the throughput, and nothing beyond eight
+threads buys anything at all.**
+
+### 19.2 What that implies
+
+Amdahl's law with a speedup of 2.00 at N=16 gives a **serial fraction of 46.7 %**
+and a hard ceiling of **2.14×**. The implementation is at 2.00× of a possible
+2.14×, which is to say **it is already against its own parallel ceiling** and no
+amount of thread tuning will move it.
+
+### 19.3 And what it does *not* imply
+
+The earlier guess in section 13 — per-tensor-op overhead — is **withdrawn as the
+explanation**, and the arithmetic is why:
+
+| | |
+|---|---|
+| FLOPs per step | about 465 GFLOP |
+| at 1 thread | 51 GFLOP/s = **44 % of one core's peak** |
+| at 16 threads | 103 GFLOP/s = about **10 % of the machine's peak** |
+
+**Single-threaded, this implementation reaches 44 % of one core's peak, which is
+good.** The deficit is entirely in scaling, not in arithmetic efficiency. A
+per-op-overhead story would show up as poor single-threaded throughput, and it
+does not.
+
+The remaining candidate is the autodiff bookkeeping and the dispatch cost of the
+many small elementwise operations the backward pass performs, which are serial
+with respect to the matmuls they sit between. **That is a hypothesis and is
+labelled as one.** No measurement in this section separates it from the
+alternatives.
+
+### 19.4 The finding that matters more than the sweep
+
+The TinyStories run began at **912 tokens/s** and ended at **480 tokens/s**,
+a 47 % decline over 47.3 hours. The run was predicted at 1.28 days and took
+**47.3 hours**, so the decline is the whole of the estimate's error.
+
+**A fresh process with the same binary, same configuration and same shape
+produces 904–905 tokens/s.** That is the starting figure, not the ending one.
+
+> **The decay is a property of a long-lived process, not of the configuration.**
+
+Rayon's default is the logical processor count, 20, and the run therefore used
+the same setting the sweep measures at 904. The sweep result and the early-run
+figure agree, which is what makes the comparison meaningful.
+
+**The cause is not identified.** What has been ruled out:
+
+| Ruled out | Evidence |
+|---|---|
+| thermal throttling | the CPU performance counter reads 116 % of nominal |
+| memory pressure | working set held at 2873 MB for the whole run |
+| thread configuration | this section |
+| the dataset reader | the run logged **0 passes** over the shard, so it never rewound |
+
+**The leading hypothesis is allocator fragmentation** — Burn allocates and frees
+tens of tensors per step and 20,000 steps is a great many — **and it is a
+hypothesis, not a measurement.** Settling it needs one more 47-hour run, which is
+not worth the machine time for a configuration this project has finished with.
+
+**The practical consequence is available now and costs nothing to use:** the run
+already writes a checkpoint every 2,000 steps and already resumes from one. A long
+run that restarts from its latest checkpoint periodically would pay the decay once
+per restart instead of once per run. **This was not tried and is not claimed to
+work**; it is the obvious next experiment and it is recorded here as untried.
+
+### 19.5 What this changes about the Stage-1 plan
+
+Nothing about the 110M model's arithmetic, and **everything about its schedule.**
+The 136-day estimate for Stage 1 was computed from a rate measured on a fresh
+process. A long run does not hold that rate. **Any Stage-1 timeline that assumes a
+constant rate is wrong by up to a factor of two**, and the TinyStories run is the
+evidence: predicted 1.28 days, actual 47.3 hours.
+
+**The GPU conclusion is unaffected and is strengthened.** On a GPU the arithmetic
+is not the constraint and neither is this decay, because the 4 GB card already
+fits only 512 tokens per micro-batch and the work per step is far smaller.
+
