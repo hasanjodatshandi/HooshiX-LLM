@@ -564,6 +564,42 @@ impl ShardReader {
         Ok(())
     }
 
+    /// Moves the read position to `index`.
+    ///
+    /// Backwards is as valid as forwards: a resume restores a position, and a
+    /// shard is a flat array of fixed-width records, so any index is one seek
+    /// away.
+    ///
+    /// # Errors
+    ///
+    /// `ShardNotAligned` if `index` is past the end. The offset is computed with
+    /// checked arithmetic because `index * sequence_length * 4` multiplies three
+    /// numbers an operator controls, and an overflow would land on a
+    /// plausible-looking wrong offset rather than failing.
+    pub fn seek(&mut self, index: u64) -> Result<(), DataError> {
+        use std::io::Seek;
+
+        let offset = index
+            .checked_mul(self.sequence_length as u64)
+            .and_then(|sequences| sequences.checked_mul(4))
+            .and_then(|bytes| SHARD_HEADER_LEN.checked_add(bytes))
+            .filter(|_| index <= self.sequence_count)
+            .ok_or_else(|| DataError::ShardNotAligned {
+                path: self.path.clone(),
+                tokens: index,
+                sequence_length: self.sequence_length,
+            })?;
+
+        self.file
+            .seek(std::io::SeekFrom::Start(offset))
+            .map_err(|source| DataError::Read {
+                path: self.path.clone(),
+                source,
+            })?;
+        self.read = index;
+        Ok(())
+    }
+
     /// Collects every sequence in the shard.
     ///
     /// For tests and for small shards. A training run streams instead, because a
@@ -647,6 +683,60 @@ mod reader_tests {
         assert_eq!(reader.next_sequence().expect("reads"), None);
         // Asking twice must stay a no-op rather than becoming an error.
         assert_eq!(reader.next_sequence().expect("reads"), None);
+    }
+
+    #[test]
+    fn seeking_lands_on_the_index_it_names() {
+        // The mechanism a resume depends on. Without it a checkpoint can record
+        // where a run had reached but the run cannot be put back there.
+        let path = write_shard("seek.shard", &sample(), 4);
+        let mut reader = ShardReader::open(&path, &expectation(IDENTITY, 4)).expect("opens");
+
+        let all = reader.read_all().expect("reads");
+        assert_eq!(all.len(), sample().len());
+        reader.rewind().expect("rewinds");
+
+        // Every index, forwards and backwards, must yield the sequence that
+        // index names rather than the next one.
+        // `sample()` holds three sequences, so the last valid index is two. The
+        // order is deliberately not ascending: seeking backwards has to work as
+        // well, because a resume restores a position rather than advancing to one.
+        for index in [2_usize, 0, 1] {
+            reader.seek(index as u64).expect("seeks");
+            assert_eq!(
+                reader.position(),
+                index as u64,
+                "position after seeking to {index}"
+            );
+            let sequence = reader
+                .next_sequence()
+                .expect("reads")
+                .expect("a sequence at a valid index");
+            assert_eq!(sequence, all[index], "the sequence at index {index}");
+            assert_eq!(
+                reader.position(),
+                index as u64 + 1,
+                "position after reading"
+            );
+        }
+    }
+
+    #[test]
+    fn seeking_to_the_end_is_allowed_and_past_it_is_not() {
+        let path = write_shard("seek-bounds.shard", &sample(), 4);
+        let mut reader = ShardReader::open(&path, &expectation(IDENTITY, 4)).expect("opens");
+        let count = reader.sequence_count();
+
+        // The end is a valid place to stand: it is where a finished epoch is.
+        reader.seek(count).expect("the end is reachable");
+        assert!(reader.next_sequence().expect("reads").is_none());
+
+        // One past the end is not, and must be refused rather than clamped,
+        // because a clamped seek would silently re-read data already seen.
+        assert!(matches!(
+            reader.seek(count + 1),
+            Err(DataError::ShardNotAligned { .. })
+        ));
     }
 
     #[test]
