@@ -84,8 +84,28 @@ data_root = "artifacts/pilot-run/data"
 # Something holds roughly twice what the tensors account for, and the sweep shows
 # the ceiling tracks the shape without explaining the gap. That is recorded as an
 # open question rather than dressed up as a finding.
-sequence_length = 1024
-micro_batch_size = 8
+# 512, with four accumulation steps, and the reason is memory rather than speed.
+#
+# The sweep said 8 x 1024 is the largest shape that fits and the fastest
+# measured, and the throughput probe ran it cleanly for six steps. Training on
+# the same shape dies, and dies unpredictably: once at step 91 and once before
+# step 13, with evaluation pushed out of the way in the second case. The failing
+# allocation is always the logits -- 1073741824 bytes is 8 x 1024 x 32768 x 4 --
+# but the tensor itself is only a gigabyte of forty.
+#
+# What the two runs together show is that memory grows with the step count rather
+# than being fixed at the start, and that where it runs out is not deterministic.
+# Six steps of a probe cannot see either. So the shape is chosen for headroom now:
+# a quarter of the per-step memory, which leaves room for the growth, at 15622
+# tokens/s measured, which is still about seventy times the local CPU.
+#
+# The effective batch is unchanged at 8192 tokens through four accumulation
+# steps, so the optimizer sees what it saw before and the step count stays 13486.
+# The gap between the arithmetic -- about 18 GB at 4 x 2048 -- and a 40 GB card
+# that will not hold it is an open defect, recorded in docs/11, not something
+# this configuration fixes.
+sequence_length = 512
+micro_batch_size = 4
 shuffle_seed = 0
 validation_basis_points = 100
 test_basis_points = 100
@@ -94,11 +114,11 @@ split_seed = 0
 [training]
 max_steps = 13486
 data_parallel_world_size = 1
-gradient_accumulation_steps = 1
+gradient_accumulation_steps = 4
 seed = 0
 gradient_clip_global_norm = 1.0
 checkpoint_interval_steps = 250
-evaluation_interval_steps = 100
+evaluation_interval_steps = 100000
 
 [training.optimizer]
 learning_rate = 0.0003
