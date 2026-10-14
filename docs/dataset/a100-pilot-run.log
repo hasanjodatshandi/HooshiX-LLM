@@ -1,0 +1,52 @@
+llm-train: loaded configuration from configs/bilingual-pilot-cuda.toml
+llm-train: backend        = cuda:0
+llm-train: precision      = f32
+llm-train: architecture   = 12 layers, hidden 768, 12 query heads, 12 kv heads, head_dim 64
+llm-train: parameters     = 110119680
+llm-train: context        = 2048 tokens, packed sequence 1024
+llm-train: effective batch = 8 sequences, 8192 tokens per optimizer step
+llm-train: max steps      = 13486
+llm-train: device preflight passed on cuda:0
+llm-train: step      13/13486  loss  10.3576  lr 1.300e-5  7653 tok/s  elapsed 0m  eta 240m
+llm-train: step      26/13486  loss   9.9289  lr 2.600e-5  10728 tok/s  elapsed 0m  eta 171m
+llm-train: step      39/13486  loss   9.5457  lr 3.900e-5  12388 tok/s  elapsed 0m  eta 148m
+llm-train: step      52/13486  loss   9.0569  lr 5.200e-5  13420 tok/s  elapsed 1m  eta 137m
+llm-train: step      65/13486  loss   8.6990  lr 6.500e-5  14121 tok/s  elapsed 1m  eta 130m
+llm-train: step      78/13486  loss   8.3177  lr 7.800e-5  14625 tok/s  elapsed 1m  eta 125m
+llm-train: step      91/13486  loss   8.1642  lr 9.100e-5  15002 tok/s  elapsed 1m  eta 122m
+llm-train: step     104/13486  loss   7.9146  lr 1.040e-4  15295 tok/s  elapsed 1m  eta 119m
+llm-train: step     117/13486  loss   7.7755  lr 1.170e-4  15527 tok/s  elapsed 1m  eta 117m
+llm-train: step     130/13486  loss   7.6243  lr 1.300e-4  15717 tok/s  elapsed 1m  eta 116m
+llm-train: step     143/13486  loss   7.6381  lr 1.430e-4  15872 tok/s  elapsed 1m  eta 115m
+llm-train: step     156/13486  loss   7.9131  lr 1.560e-4  16001 tok/s  elapsed 1m  eta 114m
+llm-train: step     169/13486  loss   7.7120  lr 1.690e-4  16112 tok/s  elapsed 1m  eta 113m
+llm-train: step     182/13486  loss   7.7651  lr 1.820e-4  16207 tok/s  elapsed 2m  eta 112m
+llm-train: step     195/13486  loss   7.9327  lr 1.950e-4  16283 tok/s  elapsed 2m  eta 111m
+llm-train: step     208/13486  loss   7.9108  lr 2.080e-4  16353 tok/s  elapsed 2m  eta 111m
+llm-train: step     221/13486  loss   7.7898  lr 2.210e-4  16412 tok/s  elapsed 2m  eta 110m
+llm-train: step     234/13486  loss   7.7935  lr 2.340e-4  16465 tok/s  elapsed 2m  eta 110m
+llm-train: step     247/13486  loss   9.4192  lr 2.470e-4  16511 tok/s  elapsed 2m  eta 109m
+llm-train: step     260/13486  loss   7.7371  lr 2.600e-4  15736 tok/s  elapsed 2m  eta 115m
+llm-train: step     273/13486  loss   7.6409  lr 2.730e-4  15808 tok/s  elapsed 2m  eta 114m
+llm-train: step     286/13486  loss   7.7200  lr 2.860e-4  15873 tok/s  elapsed 2m  eta 113m
+llm-train: step     299/13486  loss   7.7170  lr 2.990e-4  15932 tok/s  elapsed 3m  eta 113m
+llm-train: step     312/13486  loss   7.7683  lr 3.000e-4  15986 tok/s  elapsed 3m  eta 112m
+llm-train: step     325/13486  loss   7.6878  lr 3.000e-4  16035 tok/s  elapsed 3m  eta 112m
+llm-train: step     338/13486  loss   7.6796  lr 3.000e-4  16079 tok/s  elapsed 3m  eta 112m
+llm-train: step     351/13486  loss   7.8000  lr 3.000e-4  16115 tok/s  elapsed 3m  eta 111m
+llm-train: step     364/13486  loss   7.7118  lr 3.000e-4  16146 tok/s  elapsed 3m  eta 111m
+llm-train: step     377/13486  loss   7.3706  lr 3.000e-4  16170 tok/s  elapsed 3m  eta 111m
+llm-train: step     390/13486  loss   7.7654  lr 3.000e-4  16189 tok/s  elapsed 3m  eta 110m
+llm-train: step     403/13486  loss   7.9912  lr 3.000e-4  16207 tok/s  elapsed 3m  eta 110m
+llm-train: step     416/13486  loss   7.7307  lr 2.999e-4  16220 tok/s  elapsed 3m  eta 110m
+llm-train: step     429/13486  loss   7.4164  lr 2.999e-4  16232 tok/s  elapsed 4m  eta 110m
+llm-train: step     442/13486  loss   7.5224  lr 2.999e-4  16243 tok/s  elapsed 4m  eta 110m
+llm-train: step     455/13486  loss   7.5962  lr 2.999e-4  16253 tok/s  elapsed 4m  eta 109m
+llm-train: step     468/13486  loss   7.3785  lr 2.999e-4  16261 tok/s  elapsed 4m  eta 109m
+llm-train: step     481/13486  loss   7.2648  lr 2.999e-4  16268 tok/s  elapsed 4m  eta 109m
+llm-train: step     494/13486  loss   7.4783  lr 2.998e-4  16271 tok/s  elapsed 4m  eta 109m
+llm-train: step     507/13486  loss   7.3251  lr 2.998e-4  15877 tok/s  elapsed 4m  eta 112m
+llm-train: step     520/13486  loss   7.2120  lr 2.998e-4  15908 tok/s  elapsed 4m  eta 111m
+llm-train: step     533/13486  loss   7.4930  lr 2.998e-4  15932 tok/s  elapsed 5m  eta 111m
+llm-train: step     546/13486  loss   7.3657  lr 2.998e-4  15954 tok/s  elapsed 5m  eta 111m
+llm-train: step     559/13486  loss   7.2275  lr 2.997e-4  15970 tok/s  elapsed 5m  eta 110m

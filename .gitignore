@@ -31,3 +31,7 @@
 # rewritten -- tracked or not. The documents that describe these datasets are in
 # docs/dataset/ and are tracked.
 /datasets/
+# A100 pilot results. Checkpoints are hundreds of megabytes and are not source.
+# They are fetched by target/tmp/fetch-results.ps1 and kept on disk; the config
+# that produced them, and the log, are in this repository.
+/artifacts/a100/
