@@ -20,6 +20,7 @@ use burn::module::{Module, ModuleVisitor, Param};
 use burn::optim::grad_clipping::GradientClippingConfig;
 use burn::optim::{AdamWConfig, GradientsParams, ModuleOptimizer};
 use burn::tensor::{Bool, Int, Tensor};
+use llm_core::OptimizerConfig;
 use llm_model::{ModelError, NumericalQuantity, Transformer, causal_lm_loss, ensure_finite};
 
 use crate::error::{NonFiniteLoss, TrainingError};
@@ -62,19 +63,52 @@ pub struct Trainer {
     log: MetricsLog,
     steps: u64,
     gradient_clip_global_norm: Option<f64>,
+    /// The settings the optimizer was built from.
+    ///
+    /// Held so that a resume builds its second, empty optimizer from exactly the
+    /// same values the run used. Rebuilding from defaults would load stored state
+    /// into an optimizer configured differently from the one that produced it,
+    /// which is a silent change of experiment rather than a continuation of one.
+    optimizer_config: OptimizerConfig,
 }
 
 /// Builds the Stage-1 optimizer: AdamW, optionally clipping by global norm.
 ///
 /// Extracted because a resume needs a second, empty optimizer of exactly the
 /// same configuration to load the stored state into.
-fn build_optimizer(gradient_clip_global_norm: Option<f64>) -> ModuleOptimizer {
-    let mut config = AdamWConfig::new();
+///
+/// # The settings come from the configuration
+///
+/// They did not, until this was fixed. Every field but the learning rate was
+/// taken from Burn's defaults, so a `[training.optimizer]` section reading
+/// `beta2 = 0.95, weight_decay = 0.1` ran at Burn's `beta2 = 0.999` and its own
+/// default decay. The A100 pilot was trained that way. Nothing failed, nothing
+/// warned, and the only trace was a model that learned more slowly than the
+/// configuration said it should.
+///
+/// The learning rate is absent here on purpose: it is applied per step by the
+/// schedule, not by the optimizer, and setting it here as well would give the
+/// optimizer a value that the schedule then overwrites.
+///
+/// `AdamWConfig::new()` starts from Burn's defaults and each field is replaced,
+/// so a field added to `OptimizerConfig` later is the only thing that has to
+/// change here — and a reviewer can see at a glance that all four are assigned.
+fn build_optimizer(
+    optimizer_config: &OptimizerConfig,
+    gradient_clip_global_norm: Option<f64>,
+) -> ModuleOptimizer {
+    let mut config = AdamWConfig::new()
+        .with_beta_1(optimizer_config.beta1 as f32)
+        .with_beta_2(optimizer_config.beta2 as f32)
+        .with_epsilon(optimizer_config.epsilon as f32)
+        .with_weight_decay(optimizer_config.weight_decay as f32);
+
     if let Some(norm) = gradient_clip_global_norm {
         // Burn's clipping threshold is `f32`; the configured value is an
         // ordinary, validated magnitude.
         config = config.with_grad_clipping(Some(GradientClippingConfig::Norm(norm as f32)));
     }
+
     config.init()
 }
 
@@ -85,14 +119,23 @@ impl Trainer {
     /// baseline is stable, which is why the choice is not a parameter. Gradient
     /// clipping by global norm is applied by the optimizer itself, so a clipped
     /// step cannot be forgotten.
+    ///
+    /// The optimizer settings are a parameter rather than a default because the
+    /// configuration is the only place they should come from. There is
+    /// deliberately no constructor that omits them and quietly uses Burn's.
     #[must_use]
-    pub fn new(schedule: WarmupCosineSchedule, gradient_clip_global_norm: Option<f64>) -> Self {
+    pub fn new(
+        schedule: WarmupCosineSchedule,
+        gradient_clip_global_norm: Option<f64>,
+        optimizer_config: &OptimizerConfig,
+    ) -> Self {
         Self {
-            optimizer: build_optimizer(gradient_clip_global_norm),
+            optimizer: build_optimizer(optimizer_config, gradient_clip_global_norm),
             schedule,
             log: MetricsLog::new(),
             steps: 0,
             gradient_clip_global_norm,
+            optimizer_config: optimizer_config.clone(),
         }
     }
 
@@ -132,7 +175,7 @@ impl Trainer {
         path: impl AsRef<std::path::Path>,
     ) -> Result<llm_checkpoint::CheckpointMetadata, llm_checkpoint::CheckpointError> {
         let metadata = llm_checkpoint::validate(&path)?;
-        let blank = build_optimizer(self.gradient_clip_global_norm);
+        let blank = build_optimizer(&self.optimizer_config, self.gradient_clip_global_norm);
         self.optimizer = llm_checkpoint::load_optimizer(&path, blank)?;
         self.steps = metadata.global_step;
         self.log = MetricsLog::new();

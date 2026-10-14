@@ -16,7 +16,7 @@
 use std::path::{Path, PathBuf};
 
 use burn::tensor::{Distribution, Int, Tensor, TensorData};
-use llm_core::ModelConfig;
+use llm_core::{ModelConfig, OptimizerConfig};
 use llm_model::{Transformer, all_positions, next_token_pairs};
 use llm_training::checkpoint::{
     self, CHECKPOINT_FORMAT_VERSION, CheckpointExpectation, CheckpointMetadata, DataCursor,
@@ -50,7 +50,7 @@ fn schedule() -> WarmupCosineSchedule {
 }
 
 fn trainer() -> Trainer {
-    Trainer::new(schedule(), Some(1.0))
+    Trainer::new(schedule(), Some(1.0), &OptimizerConfig::default())
 }
 
 /// Serialises everything that draws from the device's random source.

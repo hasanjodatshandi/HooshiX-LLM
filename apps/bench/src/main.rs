@@ -197,7 +197,11 @@ fn measure(
         config.training.scheduler.cosine_iters,
     )
     .map_err(|error| error.to_string())?;
-    let mut trainer = Trainer::new(schedule, config.training.gradient_clip_global_norm);
+    let mut trainer = Trainer::new(
+        schedule,
+        config.training.gradient_clip_global_norm,
+        &config.training.optimizer,
+    );
 
     // Built per step rather than cloned: a batch owns its tensors and the step
     // consumes them. Rebuilding from the same rule presents the model with the

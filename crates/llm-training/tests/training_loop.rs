@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use burn::tensor::{Int, Tensor, TensorData};
-use llm_core::ModelConfig;
+use llm_core::{ModelConfig, OptimizerConfig};
 use llm_model::{Transformer, all_positions, next_token_pairs};
 use llm_training::{
     TokenBatch, Trainer, TrainingError, ValidationSchedule, WarmupCosineSchedule, evaluate,
@@ -146,7 +146,7 @@ fn the_validation_loss_is_attached_to_the_step_that_triggered_it() {
     let training = [batch_at(0, &device)];
     let held_out = [batch_at(40, &device)];
 
-    let mut trainer = Trainer::new(schedule(), Some(1.0));
+    let mut trainer = Trainer::new(schedule(), Some(1.0), &OptimizerConfig::default());
     let (model, log) = trainer
         .fit_with_validation(
             model,
@@ -186,7 +186,7 @@ fn no_validation_schedule_means_no_validation_record() {
     let model = Transformer::new(&tiny_config(), &device).expect("valid config");
     let training = [batch_at(0, &device)];
 
-    let mut trainer = Trainer::new(schedule(), Some(1.0));
+    let mut trainer = Trainer::new(schedule(), Some(1.0), &OptimizerConfig::default());
     let (_, log) = trainer.fit(model, &training, 3).expect("no step failed");
 
     assert!(
@@ -204,7 +204,7 @@ fn a_validation_interval_larger_than_the_run_never_fires() {
     let training = [batch_at(0, &device)];
     let held_out = [batch_at(40, &device)];
 
-    let mut trainer = Trainer::new(schedule(), Some(1.0));
+    let mut trainer = Trainer::new(schedule(), Some(1.0), &OptimizerConfig::default());
     let (_, log) = trainer
         .fit_with_validation(
             model,
@@ -233,7 +233,7 @@ fn the_training_loss_falls_while_the_parameters_are_held_out_from_it() {
     let training = [batch_at(0, &device)];
     let held_out = [batch_at(40, &device)];
 
-    let mut trainer = Trainer::new(schedule(), Some(1.0));
+    let mut trainer = Trainer::new(schedule(), Some(1.0), &OptimizerConfig::default());
     let (_, log) = trainer
         .fit_with_validation(
             model,

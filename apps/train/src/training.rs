@@ -137,7 +137,11 @@ pub fn run(config: &ExperimentConfig, device: &Device) -> Result<RunReport, Trai
         config.training.scheduler.warmup_steps,
         config.training.scheduler.cosine_iters,
     )?;
-    let mut trainer = Trainer::new(schedule, config.training.gradient_clip_global_norm);
+    let mut trainer = Trainer::new(
+        schedule,
+        config.training.gradient_clip_global_norm,
+        &config.training.optimizer,
+    );
 
     let checkpoint_root = data_root.parent().unwrap_or(&data_root).join("checkpoints");
     let dataset_hash = manifest.content_hash()?;

@@ -25,7 +25,7 @@
 use std::path::PathBuf;
 
 use burn::tensor::{Device, Int, Tensor, TensorData};
-use llm_core::ModelConfig;
+use llm_core::{ModelConfig, OptimizerConfig};
 use llm_model::{Transformer, all_positions, next_token_pairs};
 use llm_training::{TokenBatch, Trainer, WarmupCosineSchedule};
 
@@ -72,7 +72,7 @@ fn main() {
     println!();
 
     let schedule = WarmupCosineSchedule::new(LEARNING_RATE, 0, STEPS).expect("a valid schedule");
-    let mut trainer = Trainer::new(schedule, Some(1.0));
+    let mut trainer = Trainer::new(schedule, Some(1.0), &OptimizerConfig::default());
 
     println!("training, {STEPS} steps over every window");
     let started = std::time::Instant::now();

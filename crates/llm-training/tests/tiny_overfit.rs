@@ -19,7 +19,7 @@
 use std::path::PathBuf;
 
 use burn::tensor::{Int, Tensor, TensorData};
-use llm_core::ModelConfig;
+use llm_core::{ModelConfig, OptimizerConfig};
 use llm_model::{Transformer, all_positions, next_token_pairs};
 use llm_training::{TokenBatch, Trainer, WarmupCosineSchedule};
 
@@ -157,7 +157,7 @@ fn a_tiny_model_memorizes_a_tiny_corpus() {
 
     // A flat schedule for this test: the point is memorization, not the curve.
     let schedule = WarmupCosineSchedule::new(LEARNING_RATE, 0, STEPS).expect("a valid schedule");
-    let mut trainer = Trainer::new(schedule, Some(1.0));
+    let mut trainer = Trainer::new(schedule, Some(1.0), &OptimizerConfig::default());
     let (model, log) = trainer
         .fit(model, std::slice::from_ref(&batch), STEPS)
         .expect("no step failed");

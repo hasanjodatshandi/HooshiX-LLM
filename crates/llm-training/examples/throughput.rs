@@ -51,7 +51,7 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::time::Instant;
 
 use burn::tensor::{Device, Int, Tensor, TensorData};
-use llm_core::ExperimentConfig;
+use llm_core::{ExperimentConfig, OptimizerConfig};
 use llm_model::{AttentionMode, Transformer, all_positions, next_token_pairs};
 use llm_training::{TokenBatch, Trainer, WarmupCosineSchedule};
 
@@ -190,7 +190,7 @@ fn main() {
     )
     .expect("the configured schedule is valid");
     let clip = config.training.gradient_clip_global_norm;
-    let mut trainer = Trainer::new(schedule, clip);
+    let mut trainer = Trainer::new(schedule, clip, &OptimizerConfig::default());
 
     let mut model = model;
     let mut timings = Vec::new();
