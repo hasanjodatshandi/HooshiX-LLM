@@ -163,6 +163,28 @@ pub enum DataError {
         path: PathBuf,
     },
 
+    /// A shard holds sequences of a different length than the caller expects.
+    ///
+    /// Deliberately separate from `ShardSequenceLength`, which says a sequence
+    /// was "received" and is true when writing and false when opening. This one
+    /// is reached on open, where nothing was received — the file simply holds a
+    /// different length — and it names the fix rather than only the mismatch,
+    /// because the mismatch is almost always a configuration that moved on from
+    /// a dataset prepared for an earlier one.
+    #[error(
+        "shard `{path}` holds sequences of {found} tokens; this run is configured for {expected}. \
+         Prepare a new dataset at {expected} from the same sources with the same tokenizer, \
+         or set data.sequence_length back to {found}."
+    )]
+    ShardSequenceLengthMismatch {
+        /// Shard that was opened.
+        path: PathBuf,
+        /// Length this run is configured for.
+        expected: usize,
+        /// Length the shard actually holds.
+        found: usize,
+    },
+
     /// A sequence was pushed to a shard with the wrong length.
     #[error("shard `{path}` received a sequence of {found} tokens, expected {expected}")]
     ShardSequenceLength {

@@ -464,7 +464,7 @@ impl ShardReader {
             });
         }
         if sequence_length != expectation.sequence_length {
-            return Err(DataError::ShardSequenceLength {
+            return Err(DataError::ShardSequenceLengthMismatch {
                 path,
                 expected: expectation.sequence_length,
                 found: sequence_length,
@@ -689,12 +689,43 @@ mod reader_tests {
 
     #[test]
     fn the_wrong_sequence_length_is_refused_at_open() {
+        // This is the preflight that stops a run from building a model, seeding a
+        // device and allocating its memory before failing on the first batch. The
+        // mismatch is almost always a configuration that moved on from a dataset
+        // prepared for an earlier one, so the message has to say which is which
+        // and what to do -- it used to say a sequence had been "received", which
+        // is true when writing and false here.
         let path = write_shard("wrong-length.shard", &sample(), 4);
 
+        // Matched rather than unwrapped: `ShardReader` holds a file and does not
+        // implement `Debug`, so `expect_err` cannot be used on the result.
+        let error = match ShardReader::open(&path, &expectation(IDENTITY, 8)) {
+            Err(error) => error,
+            Ok(_) => panic!("a shard of the wrong length must be refused"),
+        };
+
         assert!(matches!(
-            ShardReader::open(&path, &expectation(IDENTITY, 8)),
-            Err(DataError::ShardSequenceLength { .. })
+            error,
+            DataError::ShardSequenceLengthMismatch { .. }
         ));
+
+        let message = error.to_string();
+        assert!(
+            message.contains('4'),
+            "names the length the shard holds: {message}"
+        );
+        assert!(
+            message.contains('8'),
+            "names the length the run wants: {message}"
+        );
+        assert!(
+            message.contains("Prepare a new dataset"),
+            "tells the operator what to do about it: {message}"
+        );
+        assert!(
+            !message.contains("received"),
+            "nothing was received when opening a file: {message}"
+        );
     }
 
     #[test]

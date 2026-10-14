@@ -55,9 +55,14 @@ impl Default for DataConfig {
 impl DataConfig {
     /// Rejects a batching or splitting configuration that cannot be honoured.
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.sequence_length == 0 {
-            return Err(ConfigError::ZeroDimension {
+        // One, not just zero. A sequence of one token leaves no next-token pair
+        // to predict, so the run would construct a model, allocate its memory and
+        // fail on the first batch rather than here.
+        if self.sequence_length < 2 {
+            return Err(ConfigError::OutOfRange {
                 field: "data.sequence_length",
+                reason: "must be at least 2, because a sequence of one token has no \
+                         next-token pair to predict",
             });
         }
         if self.micro_batch_size == 0 {
@@ -102,17 +107,36 @@ mod tests {
     }
 
     #[test]
-    fn zero_sequence_length_is_rejected() {
-        let config = DataConfig {
-            sequence_length: 0,
+    fn a_sequence_of_one_is_rejected_as_well_as_zero() {
+        // One, not only zero. A sequence of one token leaves no next-token pair
+        // to predict, so a run configured that way would build a model, seed a
+        // device and allocate its memory before failing on the first batch.
+        for length in [0, 1] {
+            let config = DataConfig {
+                sequence_length: length,
+                ..DataConfig::default()
+            };
+            assert!(
+                matches!(
+                    config.validate(),
+                    Err(ConfigError::OutOfRange {
+                        field: "data.sequence_length",
+                        ..
+                    })
+                ),
+                "sequence_length {length} must be rejected"
+            );
+        }
+
+        // And two is the first length that is not.
+        let two = DataConfig {
+            sequence_length: 2,
             ..DataConfig::default()
         };
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigError::ZeroDimension {
-                field: "data.sequence_length"
-            })
-        ));
+        assert!(
+            two.validate().is_ok(),
+            "a sequence of two can predict one token"
+        );
     }
 
     #[test]
