@@ -1,0 +1,96 @@
+# Bilingual pilot on the cloud A100.
+#
+# This is the configuration the plan actually asked for, and the first machine
+# that can run it. Every earlier run was shaped by what the hardware allowed:
+# the local CPU forced sequence 512 on the pilot, and the 4 GB card could not
+# hold this model at all — CubeCL reported out of memory at micro_batch 1 with
+# sequence 512, before a single activation. `configs/bilingual-pilot-wgpu.toml`
+# records that failure rather than deleting it.
+#
+# The A100 has 40 GB. What that changes:
+#
+#   sequence_length  2048 rather than 512. This is the value `stage1-110m.toml`
+#                    specifies and the one the bilingual plan was written
+#                    against. A 110M model at 8 x 2048 needs about 2 GiB for the
+#                    logits projection alone plus 1.6 GiB for the attention
+#                    scores, which is why no smaller machine could do it.
+#
+#   backend         cuda. Built with `--no-default-features --features cuda`,
+#                    which compiled clean in 4m17s on this host.
+#
+#   max_steps       6743, which is one epoch: 110482432 tokens divided by the
+#                   16384 tokens an optimizer step now sees. The CPU pilot was
+#                   26974 steps at 4096 tokens each; the tokens are the same and
+#                   only the shape changed.
+#
+# Learning rate and schedule are scaled with the batch rather than copied. A
+# batch four times larger with the same learning rate is a different experiment,
+# and the schedule has to end when the run does or the rate never reaches its
+# floor.
+
+version = 2
+
+[model]
+vocab_size = 32768
+hidden_size = 768
+num_layers = 12
+num_heads = 12
+num_kv_heads = 12
+ffn_intermediate_size = 2048
+max_sequence_length = 2048
+rope_theta = 10000.0
+rms_norm_eps = 0.00001
+tie_embeddings = true
+linear_bias = false
+
+[tokenizer]
+vocab_size = 32768
+model = "bpe"
+artifact = "artifacts/tokenizer-bilingual.json"
+
+[tokenizer.special_tokens]
+bos = 0
+eos = 1
+pad = 2
+unk = 3
+
+[data]
+data_root = "artifacts/pilot-run/data"
+sequence_length = 2048
+micro_batch_size = 8
+shuffle_seed = 0
+validation_basis_points = 100
+test_basis_points = 100
+split_seed = 0
+
+[training]
+max_steps = 6743
+data_parallel_world_size = 1
+gradient_accumulation_steps = 1
+seed = 0
+gradient_clip_global_norm = 1.0
+checkpoint_interval_steps = 250
+evaluation_interval_steps = 100
+
+[training.optimizer]
+learning_rate = 0.0006
+weight_decay = 0.1
+beta1 = 0.9
+beta2 = 0.95
+epsilon = 1e-8
+
+[training.scheduler]
+warmup_steps = 300
+cosine_iters = 6743
+
+[generation]
+max_new_tokens = 128
+seed = 0
+stop_on_eos = true
+
+[generation.strategy]
+kind = "greedy"
+
+[runtime]
+backend = "cuda"
+precision = "f32"

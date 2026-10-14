@@ -297,11 +297,24 @@ fn micro_batch(
     // The finiteness check happens before the backward pass: a non-finite
     // gradient would be written into every parameter by the step that follows,
     // and the corruption only becomes visible much later.
-    if let Err(error) = ensure_finite(&loss, NumericalQuantity::Loss) {
-        return Err(match error {
-            ModelError::NonFinite { quantity } => NonFiniteLoss { quantity }.into(),
-            other => other.into(),
-        });
+    // A backend that cannot read a scalar back cannot answer the question. That
+    // is not the same as the answer being bad, and `CheckUnavailable`'s own
+    // documentation says so -- but this call site treated every error alike, so
+    // a healthy run refused to train on CUDA. It exited 6 after printing the
+    // warning and using 35% of an A100 for two minutes, which is what sent
+    // anyone looking.
+    //
+    // Only `NonFinite` stops the run now. Losing the check costs the early
+    // warning it was written to give: a non-finite loss will be written into
+    // every parameter by the step that follows and the corruption will show up
+    // later rather than here. That is a real loss and it is the smaller one --
+    // the alternative is a backend on which training cannot start at all.
+    match ensure_finite(&loss, NumericalQuantity::Loss) {
+        Ok(()) | Err(ModelError::CheckUnavailable { .. }) => {}
+        Err(ModelError::NonFinite { quantity }) => {
+            return Err(NonFiniteLoss { quantity }.into());
+        }
+        Err(other) => return Err(other.into()),
     }
 
     let measured = measure(&loss).ok_or(NonFiniteLoss {
@@ -363,11 +376,16 @@ pub fn evaluate(model: &Transformer, batches: &[TokenBatch]) -> Result<f32, Trai
         let logits = model.forward(batch.input.clone(), 0)?;
         let loss = causal_lm_loss(logits, batch.target.clone(), batch.mask.clone())?;
 
-        if let Err(error) = ensure_finite(&loss, NumericalQuantity::Loss) {
-            return Err(match error {
-                ModelError::NonFinite { quantity } => NonFiniteLoss { quantity }.into(),
-                other => other.into(),
-            });
+        // Same reading as the training path: an unevaluable check is not a
+        // failed one, and refusing to validate on a backend that cannot read a
+        // scalar back would make the validation curve unavailable for exactly
+        // the runs that need it most.
+        match ensure_finite(&loss, NumericalQuantity::Loss) {
+            Ok(()) | Err(ModelError::CheckUnavailable { .. }) => {}
+            Err(ModelError::NonFinite { quantity }) => {
+                return Err(NonFiniteLoss { quantity }.into());
+            }
+            Err(other) => return Err(other.into()),
         }
 
         total += f64::from(measure(&loss).ok_or(NonFiniteLoss {
