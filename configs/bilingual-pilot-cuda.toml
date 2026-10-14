@@ -56,32 +56,52 @@ unk = 3
 
 [data]
 data_root = "artifacts/pilot-run/data"
-sequence_length = 2048
-# Four rather than eight, with two accumulation steps, keeping the effective batch
-# at 16384 tokens. The first attempt at eight ran out of device memory on a 40 GB
-# card while allocating exactly 2147483648 bytes -- 8 x 2048 x 32768 x 4, the
-# logits projection. Two gigabytes is not most of 40, so the shape alone does not
-# explain it: CubeCL's fusion backend holds intermediate buffers alive across a
-# fused region, and the peak is well above the sum of the tensors it produces.
-# Halving the micro-batch halves that peak, and accumulation restores the batch
-# the optimizer sees.
-micro_batch_size = 4
+# 1024 rather than 2048, and this is the sweep's answer rather than a guess.
+#
+# Measured on this card, 6 steps after 1 warmup, one shape at a time:
+#
+#   1x512     512      3811 tok/s     1x1024   1024      8873
+#   2x512    1024      9097           2x1024   2048     15933
+#   4x512    2048     15622           4x1024   4096     20574
+#   8x1024   8192     20726  <- best 1x2048   2048     13259
+#                                     2x2048   4096     14503
+#                                     4x2048   8192     FAILED
+#                                     8x2048  16384     FAILED
+#
+# The ceiling is 4096 tokens per micro-batch. The shape that was configured
+# before this -- 4 x 2048, which is 8192 -- is above it and fails, so the run
+# would have died again for a second time at the same wall.
+#
+# 8 x 1024 is both the largest shape that fits and the fastest measured, so the
+# batch was not traded away for memory. The effective batch falls from 16384 to
+# 8192 tokens, and the step count doubles to compensate; the learning rate is
+# halved with it, because a batch half the size at the same rate is a different
+# experiment.
+#
+# Why the ceiling sits where it does is not settled. The attention score matrix
+# at 4x2048 is 768 MB per layer and 9.2 GB across twelve, which with parameters,
+# gradients, optimizer state and logits comes to about 18 GB -- well inside 40.
+# Something holds roughly twice what the tensors account for, and the sweep shows
+# the ceiling tracks the shape without explaining the gap. That is recorded as an
+# open question rather than dressed up as a finding.
+sequence_length = 1024
+micro_batch_size = 8
 shuffle_seed = 0
 validation_basis_points = 100
 test_basis_points = 100
 split_seed = 0
 
 [training]
-max_steps = 6743
+max_steps = 13486
 data_parallel_world_size = 1
-gradient_accumulation_steps = 2
+gradient_accumulation_steps = 1
 seed = 0
 gradient_clip_global_norm = 1.0
 checkpoint_interval_steps = 250
 evaluation_interval_steps = 100
 
 [training.optimizer]
-learning_rate = 0.0006
+learning_rate = 0.0003
 weight_decay = 0.1
 beta1 = 0.9
 beta2 = 0.95
@@ -89,7 +109,7 @@ epsilon = 1e-8
 
 [training.scheduler]
 warmup_steps = 300
-cosine_iters = 6743
+cosine_iters = 13486
 
 [generation]
 max_new_tokens = 128
