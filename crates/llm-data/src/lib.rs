@@ -21,6 +21,7 @@
 //! - Same input plus same configuration produces byte-identical shards and the
 //!   same manifest content hash.
 
+pub mod boilerplate;
 pub mod dedup;
 pub mod error;
 pub mod filter;
@@ -34,6 +35,7 @@ pub mod shard;
 pub mod source;
 pub mod split;
 
+pub use boilerplate::{Boilerplate, BoilerplateReport, RemovalScope, host_of};
 pub use error::DataError;
 pub use filter::{CredentialShape, FilterConfig, FilterReason};
 pub use language::LanguageRules;
