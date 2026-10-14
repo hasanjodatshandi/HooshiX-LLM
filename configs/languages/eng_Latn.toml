@@ -21,6 +21,15 @@ min_language_score = 0.80
 
 max_minhash_cluster_size = 100
 
+# FineWeb-Edu's own educational-quality score, from the classifier that produced
+# the dataset. Three of five, which keeps the clearly educational text and drops
+# the pages that passed a language filter and nothing else.
+#
+# FineWeb2, which the Persian adapter is written for, carries no quality column
+# at all, so this is optional and the Persian adapter does not set it. A required
+# field would make one of the two adapters invalid.
+min_score = 3.0
+
 [text]
 min_chars = 100
 max_chars = 200_000
@@ -74,4 +83,5 @@ strip_diacritics = false
 # exists so the two adapters have the same shape and a reader of one can read the
 # other.
 unify_digits = false
+
 

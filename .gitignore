@@ -25,3 +25,9 @@
 # It was nearly committed. The guard is here because the next such typo should
 # cost a confusing directory rather than a repository inside a repository.
 /HooshiX-LLM/
+
+# Downloaded corpora. A gigabyte of parquet and json does not belong in the
+# repository, and the plan's rule is that raw data is immutable and never
+# rewritten -- tracked or not. The documents that describe these datasets are in
+# docs/dataset/ and are tracked.
+/datasets/

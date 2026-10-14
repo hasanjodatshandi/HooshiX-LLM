@@ -116,6 +116,14 @@ struct Adapter {
 struct SourceThresholds {
     min_language_score: f64,
     max_minhash_cluster_size: i64,
+    /// Educational-quality score, where the dataset provides one.
+    ///
+    /// Optional because only some datasets do. FineWeb-Edu carries `score` and
+    /// `int_score` from the classifier that produced it; FineWeb2 carries a
+    /// language score and a dedup cluster size and nothing about quality. A
+    /// required field would make one of the two adapters invalid.
+    #[serde(default)]
+    min_score: Option<f64>,
 }
 
 impl Adapter {
@@ -346,11 +354,12 @@ fn run(arguments: &Arguments) -> Result<u64, (u8, String)> {
     let mut written: u64 = 0;
     let mut dropped_language_score: u64 = 0;
     let mut dropped_cluster: u64 = 0;
+    let mut dropped_score: u64 = 0;
     let mut lacked_metadata: u64 = 0;
 
     // The threshold columns are looked up by name once, so a file that lacks them
     // is reported rather than silently letting every row through unfiltered.
-    let score_index = arguments
+    let language_index = arguments
         .adapter
         .as_ref()
         .and_then(|_| schema.index_of("language_score").ok());
@@ -358,6 +367,10 @@ fn run(arguments: &Arguments) -> Result<u64, (u8, String)> {
         .adapter
         .as_ref()
         .and_then(|_| schema.index_of("minhash_cluster_size").ok());
+    let score_index = arguments
+        .adapter
+        .as_ref()
+        .and_then(|_| schema.index_of("score").ok());
 
     if let Some(adapter) = &adapter {
         println!(
@@ -387,7 +400,7 @@ fn run(arguments: &Arguments) -> Result<u64, (u8, String)> {
             // computes. A drop here is counted under the dataset's reason, not
             // mixed in with ours, so the two are never confused in a report.
             if let Some(adapter) = &adapter {
-                match score_index.and_then(|i| float_at(&batch, i, row)) {
+                match language_index.and_then(|i| float_at(&batch, i, row)) {
                     Some(score) if score < adapter.source.min_language_score => {
                         dropped_language_score += 1;
                         continue;
@@ -402,6 +415,16 @@ fn run(arguments: &Arguments) -> Result<u64, (u8, String)> {
                     }
                     None => lacked_metadata += 1,
                     _ => {}
+                }
+                // A dataset with no quality column is not judged on quality. The
+                // `None` arm covers both "no threshold configured" and "no such
+                // column", and neither is a reason to drop a document.
+                if let Some(floor) = adapter.source.min_score
+                    && let Some(score) = score_index.and_then(|i| float_at(&batch, i, row))
+                    && score < floor
+                {
+                    dropped_score += 1;
+                    continue;
                 }
             }
 
@@ -448,7 +471,8 @@ fn run(arguments: &Arguments) -> Result<u64, (u8, String)> {
     if adapter.is_some() {
         println!(
             "convert: kept {written}, dropped {dropped_language_score} below language_score, \
-             {dropped_cluster} above minhash_cluster_size, {lacked_metadata} missing a score"
+             {dropped_cluster} above minhash_cluster_size, {dropped_score} below quality score, \
+             {lacked_metadata} missing a score"
         );
     }
 

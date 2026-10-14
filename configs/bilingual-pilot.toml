@@ -1,4 +1,4 @@
-﻿# Bilingual pilot: Persian and English, 100M tokens, the Stage-1 architecture.
+# Bilingual pilot: Persian and English, 100M tokens, the Stage-1 architecture.
 #
 # The purpose is to answer one question in days rather than months: does the
 # pipeline produce a model that speaks Persian. If it does, the full Stage-1 run
@@ -54,7 +54,7 @@ pad = 2
 unk = 3
 
 [data]
-data_root = "artifacts/pilot-data"
+data_root = "artifacts/pilot-run/data"
 sequence_length = 512
 micro_batch_size = 8
 shuffle_seed = 0
@@ -63,7 +63,7 @@ test_basis_points = 100
 split_seed = 0
 
 [training]
-max_steps = 26000
+max_steps = 26974
 data_parallel_world_size = 1
 gradient_accumulation_steps = 1
 seed = 0
@@ -80,7 +80,7 @@ epsilon = 1e-8
 
 [training.scheduler]
 warmup_steps = 1000
-cosine_iters = 26000
+cosine_iters = 26974
 
 [generation]
 max_new_tokens = 128
@@ -93,4 +93,5 @@ kind = "greedy"
 [runtime]
 backend = "flex"
 precision = "f32"
+
 

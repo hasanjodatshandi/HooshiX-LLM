@@ -1,0 +1,104 @@
+# Bilingual pilot on the GPU.
+#
+# The same experiment as `bilingual-pilot.toml`, on the faster backend. The
+# measurements behind the difference are in docs/11 section 20: for this model
+# the GPU is 4.3x to 8.9x at equal shapes, and at the shapes each backend can
+# actually hold the run is about 1.7x faster.
+#
+# What is the same: the architecture, the vocabulary, the sequence length, the
+# total token budget, the learning rate and the schedule. A backend change must
+# not change the experiment.
+#
+# What differs, and why each had to:
+#
+#   backend    wgpu. The measured faster path.
+#
+#   micro_batch_size  1 rather than 8, with gradient_accumulation_steps 8 rather
+#              than 1. The 4 GB card's ceiling for this model is 512 tokens per
+#              micro-batch, measured in docs/11 section 20 — and 8 x 512 is 4096.
+#              Accumulation holds the effective batch at 4096 tokens, which is
+#              what the optimizer sees and what the schedule was built around, so
+#              the experiment is unchanged and only the order of the arithmetic
+#              is. It is worth being explicit that this is not free: eight smaller
+#              steps do the same work as one large one and the gradients are
+#              mathematically identical, but the backward pass runs eight times
+#              and the kernel launch overhead is paid eight times.
+#
+#   data_root  artifacts/pilot-run/data rather than artifacts/pilot-data.
+#              The training app writes checkpoints to `data_root.parent()/
+#              checkpoints`, so pointing at `artifacts/pilot-data` would put them
+#              in `artifacts/checkpoints`, which holds the ten TinyStories
+#              checkpoints from the finished run. The app refuses to start over a
+#              non-empty checkpoint directory, which is the right behaviour and
+#              would have stopped this before the first step.
+#
+# Backend feature note: the binary must be built with `--no-default-features
+# --features wgpu`. A binary compiled for `flex` and a configuration asking for
+# `wgpu` is a startup error rather than a silent fallback, which is deliberate.
+
+version = 2
+
+[model]
+vocab_size = 32768
+hidden_size = 768
+num_layers = 12
+num_heads = 12
+num_kv_heads = 12
+ffn_intermediate_size = 2048
+max_sequence_length = 512
+rope_theta = 10000.0
+rms_norm_eps = 0.00001
+tie_embeddings = true
+linear_bias = false
+
+[tokenizer]
+vocab_size = 32768
+model = "bpe"
+artifact = "artifacts/tokenizer-bilingual.json"
+
+[tokenizer.special_tokens]
+bos = 0
+eos = 1
+pad = 2
+unk = 3
+
+[data]
+data_root = "artifacts/pilot-run/data"
+sequence_length = 512
+micro_batch_size = 1
+shuffle_seed = 0
+validation_basis_points = 100
+test_basis_points = 100
+split_seed = 0
+
+[training]
+max_steps = 26000
+data_parallel_world_size = 1
+gradient_accumulation_steps = 8
+seed = 0
+gradient_clip_global_norm = 1.0
+checkpoint_interval_steps = 500
+evaluation_interval_steps = 250
+
+[training.optimizer]
+learning_rate = 0.0003
+weight_decay = 0.1
+beta1 = 0.9
+beta2 = 0.95
+epsilon = 1e-8
+
+[training.scheduler]
+warmup_steps = 1000
+cosine_iters = 26000
+
+[generation]
+max_new_tokens = 128
+seed = 0
+stop_on_eos = true
+
+[generation.strategy]
+kind = "greedy"
+
+[runtime]
+backend = "wgpu"
+precision = "f32"
