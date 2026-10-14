@@ -211,6 +211,29 @@ pub fn run(config: &ExperimentConfig, device: &Device) -> Result<RunReport, Trai
         {
             let loss = trainer.validate(&model, &validation_batches)?;
             evaluations.push((metrics.step, loss));
+
+            // Printed as it happens, not only in the final report.
+            //
+            // A validation curve nobody can see until the run ends cannot tell
+            // anyone to stop, and on the TinyStories run it could not: the curve
+            // was monotone all the way down and the run had been configured for
+            // exactly the number of steps it took, so nothing was lost. That was
+            // luck. A run that starts to memorise shows it here first, and the
+            // reader has to be able to see it while there is still time to act.
+            //
+            // The gap is printed rather than left to be worked out, because the
+            // gap is the quantity that answers the question: negative and falling
+            // means still learning, positive and rising means memorising. The
+            // training figure is one step's loss and is noisy by construction;
+            // the validation figure is an average over a fixed set and is not.
+            println!(
+                "llm-train: validation step {:>7}/{}  loss {:>8.4}  train {:>8.4}  gap {:+8.4}",
+                metrics.step,
+                config.training.max_steps,
+                loss,
+                metrics.train_loss,
+                loss - metrics.train_loss,
+            );
         }
 
         if metrics

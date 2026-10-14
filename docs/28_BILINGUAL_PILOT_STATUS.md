@@ -113,22 +113,56 @@ inside them: BF16 (optional, unchecked) and the checkpoint suite's
 `content_sha256` tree check, which has never executed. See
 `25_STAGE1_ACCEPTANCE_REPORT.md`.
 
-### 4.2 TinyStories training — running, working
+### 4.2 TinyStories training — **finished, and it worked**
 
 | | |
 |---|---|
 | Model | 24,648,192 parameters, 6 layers, hidden 512, vocab 8192, sequence 512 |
 | Data | TinyStoriesV2 GPT-4, 2,717,495 stories, 520,848,384 tokens prepared |
 | Backend | `flex`, f32, on the i7-12700K |
-| Measured rate | **741 tokens/s** at 8×512, 799 excluding one outlier |
-| Configured run | 20,000 steps = 81.92 M tokens → **1.28 days** at that rate |
-| Status | reached step 15,840 while this was written; ~9 hours left |
-| Output | **coherent English.** "Once upon a time" → "…there was a little girl named Lily. She had a big, soft, velvet toy that she loved to play with." |
+| Configured run | 20,000 steps = 81,760,000 tokens |
+| **Result** | **completed, exit code 0, 47.3 hours** |
+| Loss | first 9.0471, best 1.1332, last 1.4902 |
+| **Validation** | **3.0262 → 1.4191, monotone, still falling at the final step** |
+| Stability | 0 refused steps, 0 abandoned, 0 non-finite losses |
+| Checkpoints | 10, steps 2000 through 20000 |
 
-**It cannot hold a conversation, and never will at this stage.** Asked "Hello, how
+**The model was not overfitting. It was undertrained.** The validation curve fell
+at every one of the forty evaluation points, from 3.0262 at step 500 to 1.4191 at
+step 20000, with no reversal anywhere. And the run covered **15.7 % of one epoch**
+— the training shard holds 1,017,282 sequences and the run consumed 159,687 of
+them, so `apps/train` logged **0 passes**. More steps would have kept helping.
+
+**Output is coherent English.** From the final checkpoint:
+
+```text
+"Once upon a time"
+→ ", there was a little girl named Lily. She loved to play with her toys and
+   eat yummy food. One day, she found a big, red apple in"
+```
+
+**It cannot hold a conversation, and will not at this stage.** Asked "Hello, how
 are you?" it wrote a story in which a fairy answers. Asked "سلام چطوری" it
 repeated one token to the budget. A base model continues text; it does not answer.
 Chat is Stage 5 work.
+
+**Three findings from the run that change later planning:**
+
+1. **The estimate was wrong by 54 %.** 1.28 days predicted, 47.3 hours actual.
+   The rate decayed from 912 to 480 tokens/s across the run. `11_BENCHMARKING.md`
+   §19.4 records the measurement: a fresh process with the same configuration
+   reproduces 904, so **the decay belongs to the long-lived process, not to the
+   configuration.** Any timeline assuming a constant rate is wrong by up to a
+   factor of two.
+2. **The bottleneck is parallel scaling, not arithmetic.** Sixteen threads buy
+   2.00×, which implies a 46.7 % serial fraction and a hard ceiling of 2.14×.
+   Single-threaded, the implementation reaches 44 % of one core's peak. §19 has
+   the table.
+3. **`apps/train` now prints validation loss during the run**, not only in the
+   final report. It did not before. The TinyStories run happened to be configured
+   for exactly the number of steps it needed, so nothing was lost — **that was
+   luck, and it was not a plan.** A run that starts to memorise shows it in this
+   line first, and it now appears every `evaluation_interval_steps`:
 
 ### 4.3 Pilot data — downloaded
 
@@ -177,18 +211,22 @@ No benchmark may run while a training process is running. `docs/11` §14 row 6
 records a measurement that had to be discarded for exactly this reason, and this
 project has since produced a **false regression** the same way.
 
-| Task | Why it matters |
+**The machine is idle now** — the TinyStories run finished. Both items below can
+run whenever they are picked up.
+
+| Task | Status |
 |---|---|
-| **`RAYON_NUM_THREADS` sweep** (2, 4, 8, 20) | **the unidentified bottleneck.** The CPU runs at 16 % of FLOP peak, 20 % of cores, 0.4 % of memory bandwidth. Neither compute nor bandwidth nor cores is saturated, and the cause is not known. A first attempt was run while training was active and was pure noise — it must be redone on an idle machine. |
-| **Measure the 24.6 M model on `wgpu`** | never done. The GPU is 4.3×–8.9× the CPU for the 110 M model; whether that holds for a 24.6 M model is unknown, and it was a direct question from the project owner. |
+| ~~`RAYON_NUM_THREADS` sweep~~ | **DONE.** See `docs/11` §19. Sixteen threads buy 2.00×, serial fraction 46.7 %, ceiling 2.14×. The bottleneck is parallel scaling; the earlier per-op-overhead explanation is withdrawn. |
+| **Measure the 24.6 M model on `wgpu`** | **not done.** The GPU is 4.3×–8.9× the CPU for the 110 M model; whether that holds for a 24.6 M model is unknown, and it was a direct question from the project owner. **This is the last outstanding measurement.** |
 
 ### 5.3 Blocked on CPU being free
 
-| Task | Cost |
+| Task | Status |
 |---|---|
-| Convert the full 4.6 GB Persian Parquet | heavy |
-| Train the bilingual tokenizer (24k–32k, balanced across three languages) | heavy |
-| Prepare the bilingual shards | heavy — took 89 minutes for a comparable TinyStories run |
+| Convert the full 4.6 GB Persian Parquet | in progress |
+| Train the bilingual tokenizer (24k–32k, balanced across three languages) | in progress |
+| Prepare the bilingual shards | pending — took 89 minutes for a comparable TinyStories run |
+| ~~Fix `apps/train` to print validation loss during the run~~ | **DONE, and verified** on a 200-step run: `validation step 25/200 loss 7.9689 train 8.0074 gap -0.0385`. Exit 0. |
 
 ### 5.4 Awaiting a decision
 
