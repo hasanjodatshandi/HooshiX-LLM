@@ -1,4 +1,4 @@
-# Persian and English evaluation prompts
+﻿# Persian and English evaluation prompts
 
 **Created:** 2026-10-12
 **Purpose:** the fixed prompt list the bilingual pilot is judged against, and the
@@ -62,36 +62,60 @@ model continues text; it does not answer.** A prompt phrased as a question would
 test a capability the model does not have and cannot have at this stage, and
 would make every checkpoint look equally bad.
 
-| # | Prompt | What it tests |
-|---|---|---|
-| P1 | `روزی روزگاری` | the canonical story opening — the highest-frequency pattern in any narrative corpus |
-| P2 | `در یکی از روزهای پاییز،` | a descriptive opening; tests whether the model continues rather than restarts |
-| P3 | `کتابی که دیروز خواندم` | first person, past tense |
-| P4 | `شهر تهران در سال‌های اخیر` | expository register, and **contains ZWNJ** — a model whose tokenizer mangles it fails here and nowhere else |
-| P5 | `او گفت: «من نمی‌دانم` | dialogue, quotation marks, and the negative verb prefix |
-| P6 | `هوا سرد بود و` | a conjunction ending; tests whether the model completes a clause |
-| P7 | `برای یادگیری برنامه‌نویسی` | technical register; **likely to draw English terms**, so it tests code-switching without punishing it |
-| P8 | `مادرم همیشه می‌گفت` | reported speech, habitual past |
+| # | Prompt | What it tests | Needle |
+|---|---|---|---|
+| P1 | `روزی روزگاری` | the canonical story opening — the highest-frequency pattern in any narrative corpus | **no** |
+| P2 | `در یکی از روزهای پاییز،` | a descriptive opening; tests whether the model continues rather than restarts | yes |
+| P3 | `کتابی که دیروز خواندم` | first person, past tense | yes |
+| P4 | `شهر تهران در سال‌های اخیر` | expository register, and **contains ZWNJ** — a model whose tokenizer mangles it fails here and nowhere else | yes |
+| P5 | `او گفت: «من نمی‌دانم` | dialogue, quotation marks, and the negative verb prefix | yes |
+| P6 | `هوا سرد بود و` | a conjunction ending; tests whether the model completes a clause | yes |
+| P7 | `برای یادگیری برنامه‌نویسی` | technical register; **likely to draw English terms**, so it tests code-switching without punishing it | yes |
+| P8 | `مادرم همیشه می‌گفت` | reported speech, habitual past | yes |
 
 **P4 and P5 are the two that matter most.** P4 contains `سال‌های` with ZWNJ, and
 P5 contains `نمی‌دانم` with both ZWNJ and a negative prefix. If the normalization
 or the tokenizer treats ZWNJ as a separator, these degrade and the rest do not.
+
+### Why two rows say `no` in the Needle column
+
+**Measured, on the real corpora, after this table was first written.**
+
+```
+persian.txt    14 of 18000 documents matched   P1 x 12
+english.txt    56 of  1400 documents matched   E1 x 53
+```
+
+`Once upon a time` is in **3.8 %** of a corpus of English books. `روزی روزگاری` is
+its Persian equivalent. **This document already said so** — the P1 row described
+it as "the highest-frequency pattern in any narrative corpus" — and then used it
+as a contamination marker anyway.
+
+**A prompt has two jobs and they pull in opposite directions.** As a *generation*
+prompt it should be the most natural opening there is, because that is what a
+model is expected to continue. As a *decontamination needle* it must be rare
+enough that finding it means something, and a phrase on four percent of documents
+means nothing.
+
+So the two roles are separated. P1 and E1 stay as generation prompts — they are
+the best ones in the set for that — and are **not** needles. The corpus is
+checked against the other fourteen.
 
 ## English prompts
 
 The same eight ideas in English, so the two languages can be compared on the same
 ground.
 
-| # | Prompt |
-|---|---|
-| E1 | `Once upon a time` |
-| E2 | `On an autumn day,` |
-| E3 | `The book I read yesterday` |
-| E4 | `The city of Tehran in recent years` |
-| E5 | `She said, "I do not know` |
-| E6 | `The air was cold and` |
-| E7 | `To learn programming` |
-| E8 | `My mother always said` |
+| # | Prompt | Needle |
+|---|---|---|
+| E1 | `Once upon a time` | **no** |
+| E2 | `On an autumn day,` | yes |
+| E3 | `The book I read yesterday` | yes |
+| E4 | `The city of Tehran in recent years` | yes |
+| E5 | `She said, "I do not know` | yes |
+| E6 | `The air was cold and` | yes |
+| E7 | `To learn programming` | yes |
+| E8 | `My mother always said` | yes |
 
 ---
 

@@ -22,6 +22,7 @@
 //!   same manifest content hash.
 
 pub mod boilerplate;
+pub mod decontamination;
 pub mod dedup;
 pub mod error;
 pub mod filter;
@@ -36,6 +37,7 @@ pub mod source;
 pub mod split;
 
 pub use boilerplate::{Boilerplate, BoilerplateReport, RemovalScope, host_of};
+pub use decontamination::{ContaminationCounter, ContaminationReport, Decontamination};
 pub use error::DataError;
 pub use filter::{CredentialShape, FilterConfig, FilterReason};
 pub use language::LanguageRules;
