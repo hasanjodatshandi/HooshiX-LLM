@@ -119,6 +119,26 @@ pub enum CheckpointError {
         source: burn::store::RecordError,
     },
 
+    /// A checkpoint was written by an optimizer with different update rules.
+    ///
+    /// Reached for every checkpoint written before `TRAINING_SEMANTICS_VERSION`
+    /// existed, because those ran `beta1`, `beta2`, `epsilon` and `weight_decay`
+    /// from Burn's defaults rather than from the configuration. Continuing one
+    /// would change the experiment without changing a number anyone could see.
+    #[error(
+        "checkpoint `{path}` was written under optimizer semantics {found}; this build resumes \
+         under {supported}. Its weights are still readable for inference, but continuing it \
+         would train with different update rules than produced it. Start a new run instead."
+    )]
+    TrainingSemanticsMismatch {
+        /// Checkpoint that was opened.
+        path: PathBuf,
+        /// Semantics it was written under.
+        found: u32,
+        /// Semantics this build resumes under.
+        supported: u32,
+    },
+
     /// The envelope declares a format version this build does not read.
     #[error("checkpoint `{path}` has format version {found}, but this build reads {supported}")]
     UnsupportedVersion {

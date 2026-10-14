@@ -236,6 +236,7 @@ fn measure(
     let _ = std::fs::remove_dir_all(&root);
     let metadata = llm_checkpoint::CheckpointMetadata {
         format_version: llm_checkpoint::CHECKPOINT_FORMAT_VERSION,
+        training_semantics_version: llm_checkpoint::TRAINING_SEMANTICS_VERSION,
         created_unix_seconds: 0,
         global_step: 1,
         tokens_seen: report.tokens_per_step,

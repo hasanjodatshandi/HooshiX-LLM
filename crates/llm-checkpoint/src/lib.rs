@@ -37,6 +37,28 @@ pub use error::CheckpointError;
 /// Format version of a checkpoint envelope.
 pub const CHECKPOINT_FORMAT_VERSION: u32 = 1;
 
+/// What the optimizer meant when a checkpoint was written.
+///
+/// Deliberately separate from the format version, which says how the envelope is
+/// laid out. This says what the numbers inside it mean, and the two change for
+/// different reasons: a layout change is a parsing concern, while this is a
+/// numerical one.
+///
+/// # Why it exists
+///
+/// Version 1 is the first. Version 0 is therefore every checkpoint written before
+/// this constant existed, and those were written by a `build_optimizer` that read
+/// `AdamWConfig::new()` and set only the gradient-clipping threshold. Their
+/// `beta1`, `beta2`, `epsilon` and `weight_decay` came from Burn's defaults no
+/// matter what the configuration said.
+///
+/// Resuming one of those under the fixed optimizer would continue a run with
+/// different update rules than produced it, silently, with no number anywhere
+/// looking wrong. The loss would simply be the loss of a different experiment.
+/// So version 0 is refused rather than migrated: the weights remain readable for
+/// inference, and a run that wants to continue from them starts a new run.
+pub const TRAINING_SEMANTICS_VERSION: u32 = 1;
+
 /// Name of the file holding the envelope.
 pub const METADATA_FILE: &str = "metadata.json";
 /// Name of the file holding the model parameters.
@@ -79,6 +101,13 @@ pub struct CheckpointMetadata {
     pub data_cursor: DataCursor,
     /// Identity of the resolved configuration.
     pub config_hash: String,
+    /// What the optimizer meant when this was written.
+    ///
+    /// Defaults to zero when absent, which is what every checkpoint written
+    /// before this field existed is. Zero is then refused on resume -- see
+    /// `TRAINING_SEMANTICS_VERSION`.
+    #[serde(default)]
+    pub training_semantics_version: u32,
     /// Identity of the tokenizer the run uses.
     pub tokenizer_identity: String,
     /// Identity of the prepared dataset.
@@ -94,6 +123,11 @@ pub struct CheckpointExpectation<'a> {
     pub dataset_manifest_hash: &'a str,
     /// Configuration hash the caller is using, when one is known.
     pub config_hash: Option<&'a str>,
+    /// Optimizer semantics the caller would resume under.
+    ///
+    /// Not optional. A caller that does not know what it is running cannot
+    /// decide whether a checkpoint may continue it.
+    pub training_semantics_version: u32,
 }
 
 /// Publishes a checkpoint atomically and returns the directory it occupies.

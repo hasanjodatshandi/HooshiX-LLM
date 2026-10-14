@@ -150,6 +150,7 @@ async fn run(arguments: &Arguments) -> ExitCode {
         tokenizer_identity: &envelope.tokenizer_identity,
         dataset_manifest_hash: &envelope.dataset_manifest_hash,
         config_hash: None,
+        training_semantics_version: llm_checkpoint::TRAINING_SEMANTICS_VERSION,
     };
     if envelope.tokenizer_identity != tokenizer.identity_hash() {
         eprintln!(

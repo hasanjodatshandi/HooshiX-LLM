@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use burn::tensor::Device;
-use llm_checkpoint::{CHECKPOINT_FORMAT_VERSION, CheckpointMetadata};
+use llm_checkpoint::{CHECKPOINT_FORMAT_VERSION, CheckpointMetadata, TRAINING_SEMANTICS_VERSION};
 use llm_core::ExperimentConfig;
 use llm_data::{DatasetManifest, Split};
 use llm_model::Transformer;
@@ -247,6 +247,7 @@ pub fn run(config: &ExperimentConfig, device: &Device) -> Result<RunReport, Trai
             let name = format!("checkpoint-{:010}", metrics.step);
             let metadata = CheckpointMetadata {
                 format_version: CHECKPOINT_FORMAT_VERSION,
+                training_semantics_version: TRAINING_SEMANTICS_VERSION,
                 created_unix_seconds: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map_or(0, |elapsed| elapsed.as_secs()),

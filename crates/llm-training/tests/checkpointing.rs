@@ -88,6 +88,7 @@ fn scratch(name: &str) -> PathBuf {
 fn metadata(step: u64) -> CheckpointMetadata {
     CheckpointMetadata {
         format_version: CHECKPOINT_FORMAT_VERSION,
+        training_semantics_version: llm_checkpoint::TRAINING_SEMANTICS_VERSION,
         created_unix_seconds: 1_700_000_000,
         global_step: step,
         tokens_seen: step * 512,
@@ -111,6 +112,7 @@ fn expectation<'a>(
         tokenizer_identity: tokenizer,
         dataset_manifest_hash: dataset,
         config_hash: config,
+        training_semantics_version: llm_checkpoint::TRAINING_SEMANTICS_VERSION,
     }
 }
 
