@@ -57,7 +57,15 @@ unk = 3
 [data]
 data_root = "artifacts/pilot-run/data"
 sequence_length = 2048
-micro_batch_size = 8
+# Four rather than eight, with two accumulation steps, keeping the effective batch
+# at 16384 tokens. The first attempt at eight ran out of device memory on a 40 GB
+# card while allocating exactly 2147483648 bytes -- 8 x 2048 x 32768 x 4, the
+# logits projection. Two gigabytes is not most of 40, so the shape alone does not
+# explain it: CubeCL's fusion backend holds intermediate buffers alive across a
+# fused region, and the peak is well above the sum of the tensors it produces.
+# Halving the micro-batch halves that peak, and accumulation restores the batch
+# the optimizer sees.
+micro_batch_size = 4
 shuffle_seed = 0
 validation_basis_points = 100
 test_basis_points = 100
@@ -66,7 +74,7 @@ split_seed = 0
 [training]
 max_steps = 6743
 data_parallel_world_size = 1
-gradient_accumulation_steps = 1
+gradient_accumulation_steps = 2
 seed = 0
 gradient_clip_global_norm = 1.0
 checkpoint_interval_steps = 250
