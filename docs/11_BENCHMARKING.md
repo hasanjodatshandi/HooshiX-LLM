@@ -970,3 +970,66 @@ evidence: predicted 1.28 days, actual 47.3 hours.
 is not the constraint and neither is this decay, because the 4 GB card already
 fits only 512 tokens per micro-batch and the work per step is far smaller.
 
+---
+
+## 20. The 24.6M model on the GPU: 3.1x to 3.3x, and the ceiling is four times higher
+
+The last outstanding measurement in `28_BILINGUAL_PILOT_STATUS.md`. The GPU was
+4.3×–8.9× the CPU for the 110M model at the shapes that fitted in 4 GB; whether a
+model a quarter the size gains anything was unknown. A small model is the
+pessimistic case, because there is less arithmetic per byte moved and the
+transfer cost is a larger share of each step.
+
+**Both sides were measured in one session on the same machine, the same build of
+the same model, immediately after each other.**
+
+| batch × sequence | tokens/step | flex, RAYON=8 | wgpu | speedup |
+|---|---|---|---|---|
+| 1×256 | 256 | 466 | 1341 | **2.9×** |
+| 2×256 | 512 | 587 | 1950 | **3.3×** |
+| 1×512 | 512 | 574 | 1845 | **3.2×** |
+| 2×512 | 1024 | 698 | 2169 | **3.1×** |
+| 4×512 | 2048 | 745 | **2414** | **3.2×** |
+| 8×512 | 4096 | 729 | **OOM** | — |
+| 1×1024 | 1024 | not measured | 1843 | — |
+
+**The GPU is 3.1×–3.3× the CPU, and it is consistent across every shape that
+fits.** The pessimistic expectation — that a quarter-size model would gain less —
+is wrong; the ratio is flat.
+
+### 20.1 The ceiling moved from 512 tokens to between 2048 and 4096
+
+The 110M model could not exceed **512 tokens per micro-batch** on this card.
+The 24.6M model completes at **2048** (4×512) and fails at **4096** (8×512), so
+its ceiling is between the two. It was not narrowed further because the shape
+above 4×512 that would separate them is not one the run would use.
+
+**This is worth noting against section 16.** There, the 1024-token ceiling on the
+110M was shown not to be attention, because every path failed including one that
+never materialises the score matrix, and the raw logits at that shape were only
+128 MiB. Whatever the constraint is, it scales with the model: a quarter-size
+model reaches four to eight times the tokens per micro-batch on the same card.
+
+The failure is a CubeCL panic, not a clean out-of-memory:
+
+```text
+thread 'DSD-4-0' panicked at cubecl-wgpu-0.11.0\src\compute\device_poison.rs:42:17
+```
+
+A poisoned device aborts the process rather than reporting a shape that will not
+fit, so the ceiling has to be found by trying shapes, which is what this table is.
+
+### 20.2 An error caught before publication
+
+The first version of the sweep script compared the GPU against **43 tokens/s at
+1×512 and 120 at 2×256**, figures carried from earlier notes. **Both were wrong
+for this model** — the measured CPU at those shapes is **574** and **587**. The
+remembered numbers belonged to a different measurement.
+
+Had they been published, the headline would have read "43× faster on the GPU",
+which is the kind of number that changes a hardware decision and would have been
+false. **Every figure in the table above was measured in this session.** The
+lesson is the one this document keeps relearning: a number recalled is not a
+number measured, and it has to be taken again even when it feels settled.
+
+

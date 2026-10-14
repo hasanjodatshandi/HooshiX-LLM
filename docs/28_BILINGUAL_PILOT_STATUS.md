@@ -269,7 +269,10 @@ run whenever they are picked up.
 | Task | Status |
 |---|---|
 | ~~`RAYON_NUM_THREADS` sweep~~ | **DONE.** See `docs/11` §19. Sixteen threads buy 2.00×, serial fraction 46.7 %, ceiling 2.14×. The bottleneck is parallel scaling; the earlier per-op-overhead explanation is withdrawn. |
-| **Measure the 24.6 M model on `wgpu`** | **not done.** The GPU is 4.3×–8.9× the CPU for the 110 M model; whether that holds for a 24.6 M model is unknown, and it was a direct question from the project owner. **This is the last outstanding measurement.** |
+| ~~Measure the 24.6 M model on `wgpu`~~ | **DONE.** See `docs/11` §20. **The GPU is 3.1×–3.3× the CPU**, flat across every shape that fits, and its ceiling is between 2048 and 4096 tokens per micro-batch against the 110 M model's 512. |
+
+**Nothing is blocked on a quiet machine any more.** Both measurements are in
+`docs/11` with their tables and their conditions.
 
 ### 5.3 Blocked on CPU being free
 
