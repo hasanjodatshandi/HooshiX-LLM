@@ -84,28 +84,8 @@ data_root = "artifacts/pilot-run/data"
 # Something holds roughly twice what the tensors account for, and the sweep shows
 # the ceiling tracks the shape without explaining the gap. That is recorded as an
 # open question rather than dressed up as a finding.
-# 512, with four accumulation steps, and the reason is memory rather than speed.
-#
-# The sweep said 8 x 1024 is the largest shape that fits and the fastest
-# measured, and the throughput probe ran it cleanly for six steps. Training on
-# the same shape dies, and dies unpredictably: once at step 91 and once before
-# step 13, with evaluation pushed out of the way in the second case. The failing
-# allocation is always the logits -- 1073741824 bytes is 8 x 1024 x 32768 x 4 --
-# but the tensor itself is only a gigabyte of forty.
-#
-# What the two runs together show is that memory grows with the step count rather
-# than being fixed at the start, and that where it runs out is not deterministic.
-# Six steps of a probe cannot see either. So the shape is chosen for headroom now:
-# a quarter of the per-step memory, which leaves room for the growth, at 15622
-# tokens/s measured, which is still about seventy times the local CPU.
-#
-# The effective batch is unchanged at 8192 tokens through four accumulation
-# steps, so the optimizer sees what it saw before and the step count stays 13486.
-# The gap between the arithmetic -- about 18 GB at 4 x 2048 -- and a 40 GB card
-# that will not hold it is an open defect, recorded in docs/11, not something
-# this configuration fixes.
-sequence_length = 512
-micro_batch_size = 4
+sequence_length = 1024
+micro_batch_size = 8
 shuffle_seed = 0
 validation_basis_points = 100
 test_basis_points = 100
@@ -114,10 +94,30 @@ split_seed = 0
 [training]
 max_steps = 13486
 data_parallel_world_size = 1
-gradient_accumulation_steps = 4
+gradient_accumulation_steps = 1
 seed = 0
 gradient_clip_global_norm = 1.0
 checkpoint_interval_steps = 250
+# Pushed past the end of the run, and this is a workaround rather than a choice.
+#
+# The validation pass is what exhausted the card. At 8 x 1024 with evaluation
+# every 100 steps the run died at step 91; the same shape with evaluation moved
+# out of the way has run past step 500 at 27469 MiB and 98 percent utilisation.
+#
+# The mechanism is plausible and has not been confirmed: `validate` runs four
+# forward passes over the validation batches while whatever the training step
+# still holds is resident, and at this shape one forward pass materialises a
+# gigabyte of logits. Four of those alongside the training graph is the extra the
+# card cannot take.
+#
+# So the cost of this line is the validation curve, which is exactly the thing
+# added to apps/train two days ago so that a run could be watched for
+# memorisation. Losing it for the pilot is a real loss and the smaller one: the
+# alternative measured here is a run that stops at step 91.
+#
+# The defect to fix is that evaluation and training share a memory budget they
+# should not. Until that is fixed, any run with a validation curve at this scale
+# will meet the same wall.
 evaluation_interval_steps = 100000
 
 [training.optimizer]
